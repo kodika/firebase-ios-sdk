@@ -73,6 +73,8 @@
         self->_indexEndKey = nil;
 
         self->_index = [FPriorityIndex priorityIndex];
+        
+        self->_bypassCache = NO;
     }
     return self;
 }
@@ -158,6 +160,8 @@
     other->_indexEndKey = _indexEndKey;
     other->_viewFrom = _viewFrom;
     other->_index = _index;
+    other->_bypassCache = _bypassCache;
+    
     return other;
 }
 
@@ -212,6 +216,12 @@
 - (FQueryParams *) orderBy:(id)newIndex {
     FQueryParams *newParams = [self mutableCopy];
     newParams->_index = newIndex;
+    return newParams;
+}
+
+- (FQueryParams *) enableBypassCache {
+    FQueryParams *newParams = [self mutableCopy];
+    newParams->_bypassCache = YES;
     return newParams;
 }
 
@@ -353,6 +363,7 @@
     if ((self->_indexStartValue != other->_indexStartValue) && ![self->_indexStartValue isEqual:other->_indexStartValue]) return NO;
     if ((self->_indexEndKey != other->_indexEndKey) && ![self->_indexEndKey isEqualToString:other->_indexEndKey]) return NO;
     if ((self->_indexEndValue != other->_indexEndValue) && ![self->_indexEndValue isEqual:other->_indexEndValue]) return NO;
+    if (self->_bypassCache != other->_bypassCache) return NO;
     if ([self isViewFromLeft] != [other isViewFromLeft]) return NO;
 
     return YES;
@@ -366,6 +377,8 @@
     result = 31 * result + [_indexEndKey hash];
     result = 31 * result + [_indexEndValue hash];
     result = 31 * result + [_index hash];
+    result = 31 * result + (_bypassCache ? 1232 : 1238);
+    
     return result;
 }
 

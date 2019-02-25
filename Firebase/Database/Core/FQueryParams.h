@@ -31,6 +31,8 @@
 
 @property (nonatomic, strong, readonly) id<FIndex> index;
 
+@property (nonatomic, readonly) BOOL bypassCache;
+
 - (BOOL)loadsAllData;
 - (BOOL)isDefault;
 - (BOOL)isValid;
@@ -46,6 +48,8 @@
 - (FQueryParams *) endAt:(id<FNode>)indexValue;
 
 - (FQueryParams *) orderBy:(id<FIndex>) index;
+
+- (FQueryParams *) enableBypassCache;
 
 + (FQueryParams *) defaultInstance;
 + (FQueryParams *) fromQueryObject:(NSDictionary *)dict;

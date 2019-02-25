@@ -247,6 +247,15 @@ priorityMethodCalled:(BOOL)priorityMethodCalled {
                              priorityMethodCalled:priorityMethod || self.priorityMethodCalled];
 }
 
+- (FIRDatabaseQuery *)queryWithBypassCache {
+    FQueryParams* params = [self.queryParams enableBypassCache];
+    return [[FIRDatabaseQuery alloc] initWithRepo:self.repo
+                                             path:self.path
+                                           params:params
+                                    orderByCalled:self.orderByCalled
+                             priorityMethodCalled:self.priorityMethodCalled];;
+}
+
 - (void)validateLimitRange:(NSUInteger)limit
 {
     // No need to check for negative ranges, since limit is unsigned
