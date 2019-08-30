@@ -32,11 +32,10 @@
 #include "Firestore/core/src/firebase/firestore/model/document_key_set.h"
 #include "Firestore/core/src/firebase/firestore/model/snapshot_version.h"
 #include "Firestore/core/src/firebase/firestore/model/types.h"
+#include "Firestore/core/src/firebase/firestore/objc/objc_compatibility.h"
 
 @class FSTLocalSerializer;
 @class FSTMemoryPersistence;
-@class FSTQuery;
-@class FSTQueryData;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -44,23 +43,25 @@ namespace firebase {
 namespace firestore {
 namespace local {
 
+class Sizer;
+
 class MemoryQueryCache : public QueryCache {
  public:
   explicit MemoryQueryCache(FSTMemoryPersistence* persistence);
 
   // Target-related methods
-  void AddTarget(FSTQueryData* query_data) override;
+  void AddTarget(const QueryData& query_data) override;
 
-  void UpdateTarget(FSTQueryData* query_data) override;
+  void UpdateTarget(const QueryData& query_data) override;
 
-  void RemoveTarget(FSTQueryData* query_data) override;
+  void RemoveTarget(const QueryData& query_data) override;
 
-  FSTQueryData* _Nullable GetTarget(FSTQuery* query) override;
+  absl::optional<QueryData> GetTarget(const core::Query& query) override;
 
-  void EnumerateTargets(TargetEnumerator block) override;
+  void EnumerateTargets(const TargetCallback& callback) override;
 
   int RemoveTargets(model::ListenSequenceNumber upper_bound,
-                    const std::unordered_map<model::TargetId, FSTQueryData*>&
+                    const std::unordered_map<model::TargetId, QueryData>&
                         live_targets) override;
 
   // Key-related methods
@@ -75,10 +76,10 @@ class MemoryQueryCache : public QueryCache {
   bool Contains(const model::DocumentKey& key) override;
 
   // Other methods and accessors
-  size_t CalculateByteSize(FSTLocalSerializer* serializer);
+  size_t CalculateByteSize(const Sizer& sizer);
 
   size_t size() const override {
-    return [queries_ count];
+    return queries_.size();
   }
 
   model::ListenSequenceNumber highest_listen_sequence_number() const override {
@@ -94,7 +95,9 @@ class MemoryQueryCache : public QueryCache {
   void SetLastRemoteSnapshotVersion(model::SnapshotVersion version) override;
 
  private:
-  FSTMemoryPersistence* persistence_;
+  // This instance is owned by FSTMemoryPersistence; avoid a retain cycle.
+  __weak FSTMemoryPersistence* persistence_;
+
   /** The highest sequence number encountered */
   model::ListenSequenceNumber highest_listen_sequence_number_;
   /** The highest numbered target ID encountered. */
@@ -103,9 +106,12 @@ class MemoryQueryCache : public QueryCache {
   model::SnapshotVersion last_remote_snapshot_version_;
 
   /** Maps a query to the data about that query. */
-  NSMutableDictionary<FSTQuery*, FSTQueryData*>* queries_;
-  /** A ordered bidirectional mapping between documents and the remote target
-   * IDs. */
+  std::unordered_map<core::Query, QueryData> queries_;
+
+  /**
+   * A ordered bidirectional mapping between documents and the remote target
+   * IDs.
+   */
   ReferenceSet references_;
 };
 

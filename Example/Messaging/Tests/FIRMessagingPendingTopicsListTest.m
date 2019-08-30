@@ -17,9 +17,9 @@
 #import <OCMock/OCMock.h>
 #import <XCTest/XCTest.h>
 
-#import "FIRMessagingDefines.h"
-#import "FIRMessagingPendingTopicsList.h"
-#import "FIRMessagingTopicsCommon.h"
+#import "Firebase/Messaging/FIRMessagingDefines.h"
+#import "Firebase/Messaging/FIRMessagingPendingTopicsList.h"
+#import "Firebase/Messaging/FIRMessagingTopicsCommon.h"
 
 typedef void (^MockDelegateSubscriptionHandler)(NSString *topic,
                                                 FIRMessagingTopicAction action,
@@ -35,7 +35,7 @@ typedef void (^MockDelegateSubscriptionHandler)(NSString *topic,
 
 @property(nonatomic, assign) BOOL isReady;
 @property(nonatomic, copy) MockDelegateSubscriptionHandler subscriptionHandler;
-@property(nonatomic, copy) void(^updateHandler)();
+@property(nonatomic, copy) void(^updateHandler)(void);
 
 @end
 
@@ -121,7 +121,7 @@ typedef void (^MockDelegateSubscriptionHandler)(NSString *topic,
   pendingTopics.delegate = self.notReadyDelegate;
 
   for (NSInteger i = 0; i < 10; i++) {
-    NSString *topic = [NSString stringWithFormat:@"/topics/%ld", i];
+    NSString *topic = [NSString stringWithFormat:@"/topics/%ld", (long)i];
     [pendingTopics addOperationForTopic:topic
                              withAction:FIRMessagingTopicActionSubscribe
                              completion:nil];

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'GoogleUtilities'
-  s.version          = '5.3.7'
+  s.version          = '6.3.0'
   s.summary          = 'Google Utilities for iOS (plus community support for macOS and tvOS)'
 
   s.description      = <<-DESC
@@ -16,10 +16,9 @@ other Google CocoaPods. They're not intended for direct public usage.
     :git => 'https://github.com/firebase/firebase-ios-sdk.git',
     :tag => 'Utilities-' + s.version.to_s
   }
-  # Technically GoogleUtilites requires iOS 7, but it supports a dependency pod with a minimum
-  # iOS 6, that will do runtime checking to avoid calling into GoogleUtilities.
-  s.ios.deployment_target = '6.0'
-  s.osx.deployment_target = '10.10'
+
+  s.ios.deployment_target = '8.0'
+  s.osx.deployment_target = '10.11'
   s.tvos.deployment_target = '10.0'
 
   s.cocoapods_version = '>= 1.4.0'
@@ -33,7 +32,7 @@ other Google CocoaPods. They're not intended for direct public usage.
 
   s.subspec 'Logger' do |ls|
     ls.source_files = 'GoogleUtilities/Logger/**/*.[mh]'
-    ls.public_header_files = 'GoogleUtilities/Logger/Public/*.h'
+    ls.public_header_files = 'GoogleUtilities/Logger/Private/*.h', 'GoogleUtilities/Logger/Public/*.h'
     ls.private_header_files = 'GoogleUtilities/Logger/Private/*.h'
     ls.dependency 'GoogleUtilities/Environment'
   end
@@ -79,7 +78,11 @@ other Google CocoaPods. They're not intended for direct public usage.
 
   s.subspec 'ISASwizzler' do |iss|
     iss.source_files = 'GoogleUtilities/ISASwizzler/**/*.[mh]', 'GoogleUtilities/Common/*.h'
+    iss.public_header_files = 'GoogleUtilities/ISASwizzler/Private/*.h'
     iss.private_header_files = 'GoogleUtilities/ISASwizzler/Private/*.h'
+
+    # Disable ARC for GULSwizzledObject.
+    iss.requires_arc = ['GoogleUtilities/Common/*.h', 'GoogleUtilities/ISASwizzler/GULObjectSwizzler*.[mh]']
   end
 
   s.subspec 'MethodSwizzler' do |mss|
@@ -91,6 +94,7 @@ other Google CocoaPods. They're not intended for direct public usage.
   s.subspec 'SwizzlerTestHelpers' do |sths|
     sths.source_files = 'GoogleUtilities/SwizzlerTestHelpers/*.[hm]'
     sths.private_header_files = 'GoogleUtilities/SwizzlerTestHelpers/*.h'
+    sths.dependency 'GoogleUtilities/MethodSwizzler'
   end
 
   s.subspec 'UserDefaults' do |ud|
@@ -98,5 +102,18 @@ other Google CocoaPods. They're not intended for direct public usage.
     ud.public_header_files = 'GoogleUtilities/UserDefaults/Private/*.h'
     ud.private_header_files = 'GoogleUtilities/UserDefaults/Private/*.h'
     ud.dependency 'GoogleUtilities/Logger'
+  end
+
+  s.subspec 'SecureCoding' do |sc|
+    sc.source_files = 'GoogleUtilities/SecureCoding/**/*.[hm]'
+    sc.public_header_files = 'GoogleUtilities/SecureCoding/Public/*.h'
+  end
+
+  s.test_spec 'unit' do |unit_tests|
+    # All tests require arc except Tests/Network/third_party/GTMHTTPServer.m
+    unit_tests.source_files = 'GoogleUtilities/Example/Tests/**/*.[mh]'
+    unit_tests.requires_arc = 'GoogleUtilities/Example/Tests/*/*.[mh]'
+    unit_tests.requires_app_host = true
+    unit_tests.dependency 'OCMock'
   end
 end

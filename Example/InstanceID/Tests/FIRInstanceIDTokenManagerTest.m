@@ -30,7 +30,7 @@
 #import "Firebase/InstanceID/FIRInstanceIDTokenOperation.h"
 #import "Firebase/InstanceID/FIRInstanceIDTokenStore.h"
 
-static NSString *const kApplicationSupportSubDirectoryName = @"FirebaseInstanceIDTokenManagerTest";
+static NSString *const kSubDirectoryName = @"FirebaseInstanceIDTokenManagerTest";
 
 static NSString *const kAuthorizedEntity = @"test-authorized-entity";
 static NSString *const kScope = @"test-scope";
@@ -48,13 +48,31 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
 
 @end
 
-@interface FIRInstanceIDTokenManager ()
+@interface FIRInstanceIDTokenManager (ExposedForTests)
 
 - (BOOL)checkForTokenRefreshPolicy;
 - (void)updateToAPNSDeviceToken:(NSData *)deviceToken isSandbox:(BOOL)isSandbox;
+/**
+ *  Create a fetch operation. This method can be stubbed to return a particular operation instance,
+ *  which makes it easier to unit test different behaviors.
+ */
+- (FIRInstanceIDTokenFetchOperation *)
+    createFetchOperationWithAuthorizedEntity:(NSString *)authorizedEntity
+                                       scope:(NSString *)scope
+                                     options:(NSDictionary<NSString *, NSString *> *)options
+                                     keyPair:(FIRInstanceIDKeyPair *)keyPair;
 
+/**
+ *  Create a delete operation. This method can be stubbed to return a particular operation instance,
+ *  which makes it easier to unit test different behaviors.
+ */
+- (FIRInstanceIDTokenDeleteOperation *)
+    createDeleteOperationWithAuthorizedEntity:(NSString *)authorizedEntity
+                                        scope:(NSString *)scope
+                           checkinPreferences:(FIRInstanceIDCheckinPreferences *)checkinPreferences
+                                      keyPair:(FIRInstanceIDKeyPair *)keyPair
+                                       action:(FIRInstanceIDTokenAction)action;
 @end
-;
 
 @interface FIRInstanceIDTokenManagerTest : XCTestCase
 
@@ -73,12 +91,12 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
 
 - (void)setUp {
   [super setUp];
-  [FIRInstanceIDStore createApplicationSupportSubDirectory:kApplicationSupportSubDirectoryName];
+  [FIRInstanceIDStore createSubDirectory:kSubDirectoryName];
 
   NSString *checkinPlistFilename = @"com.google.test.IIDCheckinTest";
-  self.checkinPlist = [[FIRInstanceIDBackupExcludedPlist alloc]
-                    initWithFileName:checkinPlistFilename
-      applicationSupportSubDirectory:kApplicationSupportSubDirectoryName];
+  self.checkinPlist =
+      [[FIRInstanceIDBackupExcludedPlist alloc] initWithFileName:checkinPlistFilename
+                                                    subDirectory:kSubDirectoryName];
 
   // checkin store
   FIRInstanceIDFakeKeychain *fakeCheckinKeychain = [[FIRInstanceIDFakeKeychain alloc] init];
@@ -87,26 +105,34 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                                      keychain:fakeCheckinKeychain];
 
   // token store
-  _fakeKeyChain = [[FIRInstanceIDFakeKeychain alloc] init];
-  _tokenStore = [[FIRInstanceIDTokenStore alloc] initWithKeychain:_fakeKeyChain];
+  self.fakeKeyChain = [[FIRInstanceIDFakeKeychain alloc] init];
+  self.tokenStore = [[FIRInstanceIDTokenStore alloc] initWithKeychain:_fakeKeyChain];
 
-  _tokenManager = [[FIRInstanceIDTokenManager alloc] initWithCheckinStore:checkinStore
-                                                               tokenStore:self.tokenStore];
-  _mockTokenManager = OCMPartialMock(_tokenManager);
+  self.tokenManager = [[FIRInstanceIDTokenManager alloc] initWithCheckinStore:checkinStore
+                                                                   tokenStore:self.tokenStore];
+  self.mockTokenManager = OCMPartialMock(self.tokenManager);
 
-  _fakeCheckin = [[FIRInstanceIDCheckinPreferences alloc] initWithDeviceID:@"fakeDeviceID"
-                                                               secretToken:@"fakeSecretToken"];
+  self.fakeCheckin = [[FIRInstanceIDCheckinPreferences alloc] initWithDeviceID:@"fakeDeviceID"
+                                                                   secretToken:@"fakeSecretToken"];
 }
 
 - (void)tearDown {
+  self.fakeCheckin = nil;
+
+  [self.mockTokenManager stopMocking];
+  self.mockTokenManager = nil;
+
+  self.tokenManager = nil;
+  self.tokenStore = nil;
+  self.fakeKeyChain = nil;
+
   NSError *error;
   if (![self.checkinPlist deleteFile:&error]) {
     XCTFail(@"Failed to delete checkin plist %@", error);
   }
+  self.checkinPlist = nil;
 
-  self.tokenManager = nil;
-  [FIRInstanceIDStore removeApplicationSupportSubDirectory:kApplicationSupportSubDirectoryName
-                                                     error:nil];
+  [FIRInstanceIDStore removeSubDirectory:kSubDirectoryName error:nil];
   [super tearDown];
 }
 
@@ -134,6 +160,12 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                   error:nil];
   }] performTokenOperation];
 
+  XCTestExpectation *operationFinishExpectation =
+      [self expectationWithDescription:@"operationFinishExpectation"];
+  operation.completionBlock = ^{
+    [operationFinishExpectation fulfill];
+  };
+
   // Return our fake operation when asked for an operation
   [[[self.mockTokenManager stub] andReturn:operation]
       createFetchOperationWithAuthorizedEntity:[OCMArg any]
@@ -146,17 +178,18 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                                keyPair:[OCMArg any]
                                                options:tokenOptions
                                                handler:^(NSString *token, NSError *error) {
-                                                 // Keep 'operation' alive, so it's not
-                                                 // prematurely destroyed
-                                                 XCTAssertNotNil(operation);
-                                                 XCTAssertNotNil(mockOperation);
                                                  XCTAssertNotNil(token);
                                                  XCTAssertGreaterThan(token.length, 0);
                                                  XCTAssertNil(error);
                                                  [tokenExpectation fulfill];
                                                }];
 
-  [self waitForExpectationsWithTimeout:1 handler:nil];
+  [self waitForExpectations:@[ tokenExpectation, operationFinishExpectation ] timeout:1];
+
+  // Make sure the partial mock stops mocking before `operation` is deallocated to avoid crash.
+  [mockOperation stopMocking];
+  // Keep 'operation' alive, so it's not prematurely destroyed
+  XCTAssertNotNil(operation);
 }
 
 /**
@@ -185,6 +218,12 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                   error:nil];
   }] performTokenOperation];
 
+  XCTestExpectation *operationFinishExpectation =
+      [self expectationWithDescription:@"operationFinishExpectation"];
+  operation.completionBlock = ^{
+    [operationFinishExpectation fulfill];
+  };
+
   // Return our fake operation when asked for an operation
   [[[self.mockTokenManager stub] andReturn:operation]
       createFetchOperationWithAuthorizedEntity:[OCMArg any]
@@ -197,19 +236,17 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                                keyPair:[OCMArg any]
                                                options:tokenOptions
                                                handler:^(NSString *token, NSError *error) {
-                                                 // Keep 'operation' alive, so it's not prematurely
-                                                 // destroyed
-                                                 XCTAssertNotNil(operation);
-                                                 XCTAssertNotNil(mockOperation);
                                                  XCTAssertNil(token);
                                                  XCTAssertNotNil(error);
                                                  [tokenExpectation fulfill];
                                                }];
 
-  [self waitForExpectationsWithTimeout:1
-                               handler:^(NSError *error) {
-                                 XCTAssertNil(error.localizedDescription);
-                               }];
+  [self waitForExpectations:@[ tokenExpectation, operationFinishExpectation ] timeout:1];
+
+  // Make sure the partial mock stops mocking before `operation` is deallocated to avoid crash.
+  [mockOperation stopMocking];
+  // Keep 'operation' alive, so it's not prematurely destroyed
+  XCTAssertNotNil(operation);
 }
 
 /**
@@ -235,6 +272,12 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
     [invocation.target finishWithResult:FIRInstanceIDTokenOperationError token:nil error:someError];
   }] performTokenOperation];
 
+  XCTestExpectation *operationFinishExpectation =
+      [self expectationWithDescription:@"operationFinishExpectation"];
+  operation.completionBlock = ^{
+    [operationFinishExpectation fulfill];
+  };
+
   // Return our fake operation when asked for an operation
   [[[self.mockTokenManager stub] andReturn:operation]
       createFetchOperationWithAuthorizedEntity:[OCMArg any]
@@ -247,19 +290,17 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                                keyPair:[OCMArg any]
                                                options:tokenOptions
                                                handler:^(NSString *token, NSError *error) {
-                                                 // Keep 'operation' alive, so it's not
-                                                 // prematurely destroyed
-                                                 XCTAssertNotNil(operation);
-                                                 XCTAssertNotNil(mockOperation);
                                                  XCTAssertNil(token);
                                                  XCTAssertNotNil(error);
                                                  [tokenExpectation fulfill];
                                                }];
 
-  [self waitForExpectationsWithTimeout:1
-                               handler:^(NSError *error) {
-                                 XCTAssertNil(error.localizedDescription);
-                               }];
+  [self waitForExpectations:@[ tokenExpectation, operationFinishExpectation ] timeout:1];
+
+  // Make sure the partial mock stops mocking before `operation` is deallocated to avoid crash.
+  [mockOperation stopMocking];
+  // Keep 'operation' alive, so it's not prematurely destroyed
+  XCTAssertNotNil(operation);
 }
 
 /**
@@ -281,6 +322,12 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
     [invocation.target finishWithResult:FIRInstanceIDTokenOperationSucceeded token:nil error:nil];
   }] performTokenOperation];
 
+  XCTestExpectation *operationFinishExpectation =
+      [self expectationWithDescription:@"operationFinishExpectation"];
+  operation.completionBlock = ^{
+    [operationFinishExpectation fulfill];
+  };
+
   // Return our fake operation when asked for an operation
   [[[self.mockTokenManager stub] andReturn:operation]
       createDeleteOperationWithAuthorizedEntity:[OCMArg any]
@@ -293,18 +340,16 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                                scope:kScope
                                              keyPair:[OCMArg any]
                                              handler:^(NSError *error) {
-                                               // Keep 'operation' alive, so it's not prematurely
-                                               // destroyed
-                                               XCTAssertNotNil(operation);
-                                               XCTAssertNotNil(mockOperation);
                                                XCTAssertNil(error);
                                                [deleteExpectation fulfill];
                                              }];
 
-  [self waitForExpectationsWithTimeout:1
-                               handler:^(NSError *error) {
-                                 XCTAssertNil(error.localizedDescription);
-                               }];
+  [self waitForExpectations:@[ deleteExpectation, operationFinishExpectation ] timeout:1];
+
+  // Make sure the partial mock stops mocking before `operation` is deallocated to avoid crash.
+  [mockOperation stopMocking];
+  // Keep 'operation' alive, so it's not prematurely destroyed
+  XCTAssertNotNil(operation);
 }
 
 /**
@@ -327,6 +372,12 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
     [invocation.target finishWithResult:FIRInstanceIDTokenOperationError token:nil error:someError];
   }] performTokenOperation];
 
+  XCTestExpectation *operationFinishExpectation =
+      [self expectationWithDescription:@"operationFinishExpectation"];
+  operation.completionBlock = ^{
+    [operationFinishExpectation fulfill];
+  };
+
   // Return our fake operation when asked for an operation
   [[[self.mockTokenManager stub] andReturn:operation]
       createDeleteOperationWithAuthorizedEntity:[OCMArg any]
@@ -339,18 +390,16 @@ static NSString *const kNewAPNSTokenString = @"newAPNSData";
                                                scope:kScope
                                              keyPair:[OCMArg any]
                                              handler:^(NSError *error) {
-                                               // Keep 'operation' alive, so it's not prematurely
-                                               // destroyed
-                                               XCTAssertNotNil(operation);
-                                               XCTAssertNotNil(mockOperation);
                                                XCTAssertNotNil(error);
                                                [deleteExpectation fulfill];
                                              }];
 
-  [self waitForExpectationsWithTimeout:1
-                               handler:^(NSError *error) {
-                                 XCTAssertNil(error.localizedDescription);
-                               }];
+  [self waitForExpectations:@[ deleteExpectation, operationFinishExpectation ] timeout:1];
+
+  // Make sure the partial mock stops mocking before `operation` is deallocated to avoid crash.
+  [mockOperation stopMocking];
+  // Keep 'operation' alive, so it's not prematurely destroyed
+  XCTAssertNotNil(operation);
 }
 
 #pragma mark - Cached Token Invalidation

@@ -19,7 +19,15 @@
 
 import Foundation
 import XCTest
-import FirebaseFirestore
+
+// The Firebase pod is only available on iOS. On other platforms, import
+// Firestore directly and disable any tests that inspect types at the Firebase
+// level.
+#if os(iOS)
+  import Firebase
+#else
+  import FirebaseFirestore
+#endif
 
 class BasicCompileTests: XCTestCase {
   func testCompiled() {
@@ -52,7 +60,13 @@ func main() {
 
   enableDisableNetwork(database: db)
 
+  clearPersistence(database: db)
+
   types()
+
+  waitForPendingWrites(database: db)
+
+  terminateDb(database: db)
 }
 
 func initializeDb() -> Firestore {
@@ -90,14 +104,17 @@ func makeRefs(database db: Firestore) -> (CollectionReference, DocumentReference
 }
 
 func makeQuery(collection collectionRef: CollectionReference) -> Query {
-  let query = collectionRef.whereField(FieldPath(["name"]), isEqualTo: "Fred")
+  var query = collectionRef.whereField(FieldPath(["name"]), isEqualTo: "Fred")
     .whereField("age", isGreaterThanOrEqualTo: 24)
     .whereField("tags", arrayContains: "active")
+    .whereField(FieldPath(["tags"]), arrayContains: "active")
     .whereField(FieldPath(["tags"]), arrayContains: "active")
     .whereField(FieldPath.documentID(), isEqualTo: "fred")
     .order(by: FieldPath(["age"]))
     .order(by: "name", descending: true)
     .limit(to: 10)
+
+  query = collectionRef.firestore.collectionGroup("collection")
 
   return query
 }
@@ -172,6 +189,15 @@ func enableDisableNetwork(database db: Firestore) {
   }
 }
 
+func clearPersistence(database db: Firestore) {
+  db.clearPersistence { error in
+    if let e = error {
+      print("Uh oh! \(e)")
+      return
+    }
+  }
+}
+
 func writeDocuments(at docRef: DocumentReference, database db: Firestore) {
   var batch: WriteBatch
 
@@ -198,7 +224,7 @@ func writeDocuments(at docRef: DocumentReference, database db: Firestore) {
 }
 
 func addDocument(to collectionRef: CollectionReference) {
-  collectionRef.addDocument(data: ["foo": 42])
+  _ = collectionRef.addDocument(data: ["foo": 42])
   // or
   collectionRef.document().setData(["foo": 42])
 }
@@ -410,11 +436,37 @@ func types() {
   let _: Firestore
   let _: FirestoreSettings
   let _: GeoPoint
+  #if os(iOS)
+    let _: Firebase.GeoPoint
+  #endif
+  let _: FirebaseFirestore.GeoPoint
   let _: Timestamp
+  #if os(iOS)
+    let _: Firebase.Timestamp
+  #endif
+  let _: FirebaseFirestore.Timestamp
   let _: ListenerRegistration
   let _: Query
   let _: QuerySnapshot
   let _: SnapshotMetadata
   let _: Transaction
   let _: WriteBatch
+}
+
+func waitForPendingWrites(database db: Firestore) {
+  db.waitForPendingWrites { error in
+    if let e = error {
+      print("Uh oh! \(e)")
+      return
+    }
+  }
+}
+
+func terminateDb(database db: Firestore) {
+  db.terminate { error in
+    if let e = error {
+      print("Uh oh! \(e)")
+      return
+    }
+  }
 }

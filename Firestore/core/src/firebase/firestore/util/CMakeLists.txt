@@ -94,7 +94,6 @@ cc_library(
     string_format.h
   DEPENDS
     FirebaseCore
-    GoogleUtilities
     absl_base
     absl_strings
   EXCLUDE_FROM_ALL
@@ -210,6 +209,7 @@ cc_library(
     status_win.cc
     statusor.cc
     statusor.h
+    statusor_callback.h
     statusor_internals.h
     strerror.cc
     strerror.h
@@ -241,19 +241,24 @@ cc_library(
   SOURCES
     bits.cc
     bits.h
-    comparator_holder.h
     comparison.cc
     comparison.h
+    compressed_member.h
     config.h
+    delayed_constructor.h
+    error_apple.h
+    error_apple.mm
     hashing.h
     iterator_adaptors.h
     ordered_code.cc
     ordered_code.h
     range.h
+    sanitizers.h
     string_util.cc
     string_util.h
     to_string.h
     type_traits.h
+    warnings.h
   DEPENDS
     absl_base
     firebase_firestore_util_async

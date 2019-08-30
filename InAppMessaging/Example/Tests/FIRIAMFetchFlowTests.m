@@ -24,6 +24,11 @@
 #import "FIRIAMMessageContentDataWithImageURL.h"
 #import "FIRIAMSDKModeManager.h"
 
+@interface FIRIAMFetchFlow (Testing)
+// Expose to verify that this gets called on initial app launch fetch.
+- (void)checkForAppLaunchMessage;
+@end
+
 @interface FIRIAMFetchFlowTests : XCTestCase
 @property(nonatomic) FIRIAMFetchSetting *fetchSetting;
 @property FIRIAMMessageClientCache *clientMessageCache;
@@ -53,12 +58,15 @@ CGFloat FETCH_MIN_INTERVALS = 1;
 
   FIRIAMMessageContentDataWithImageURL *m1ContentData =
       [[FIRIAMMessageContentDataWithImageURL alloc]
-          initWithMessageTitle:@"m1 title"
-                   messageBody:@"message body"
-              actionButtonText:nil
-                     actionURL:[NSURL URLWithString:@"http://google.com"]
-                      imageURL:[NSURL URLWithString:@"https://unsplash.it/300/300"]
-               usingURLSession:nil];
+               initWithMessageTitle:@"m1 title"
+                        messageBody:@"message body"
+                   actionButtonText:nil
+          secondaryActionButtonText:nil
+                          actionURL:[NSURL URLWithString:@"http://google.com"]
+                 secondaryActionURL:nil
+                           imageURL:[NSURL URLWithString:@"https://unsplash.it/300/300"]
+                  landscapeImageURL:nil
+                    usingURLSession:nil];
 
   FIRIAMRenderingEffectSetting *renderSetting1 =
       [FIRIAMRenderingEffectSetting getDefaultRenderingEffectSetting];
@@ -77,12 +85,15 @@ CGFloat FETCH_MIN_INTERVALS = 1;
 
   FIRIAMMessageContentDataWithImageURL *m2ContentData =
       [[FIRIAMMessageContentDataWithImageURL alloc]
-          initWithMessageTitle:@"m2 title"
-                   messageBody:@"message body"
-              actionButtonText:nil
-                     actionURL:[NSURL URLWithString:@"http://google.com"]
-                      imageURL:[NSURL URLWithString:@"https://unsplash.it/300/400"]
-               usingURLSession:nil];
+               initWithMessageTitle:@"m2 title"
+                        messageBody:@"message body"
+                   actionButtonText:nil
+          secondaryActionButtonText:nil
+                          actionURL:[NSURL URLWithString:@"http://google.com"]
+                 secondaryActionURL:nil
+                           imageURL:[NSURL URLWithString:@"https://unsplash.it/300/400"]
+                  landscapeImageURL:nil
+                    usingURLSession:nil];
 
   FIRIAMRenderingEffectSetting *renderSetting2 =
       [FIRIAMRenderingEffectSetting getDefaultRenderingEffectSetting];
@@ -101,12 +112,15 @@ CGFloat FETCH_MIN_INTERVALS = 1;
 
   FIRIAMMessageContentDataWithImageURL *m3ContentData =
       [[FIRIAMMessageContentDataWithImageURL alloc]
-          initWithMessageTitle:@"m3 title"
-                   messageBody:@"message body"
-              actionButtonText:nil
-                     actionURL:[NSURL URLWithString:@"http://google.com"]
-                      imageURL:[NSURL URLWithString:@"https://unsplash.it/400/300"]
-               usingURLSession:nil];
+               initWithMessageTitle:@"m3 title"
+                        messageBody:@"message body"
+                   actionButtonText:nil
+          secondaryActionButtonText:nil
+                          actionURL:[NSURL URLWithString:@"http://google.com"]
+                 secondaryActionURL:nil
+                           imageURL:[NSURL URLWithString:@"https://unsplash.it/400/300"]
+                  landscapeImageURL:nil
+                    usingURLSession:nil];
 
   FIRIAMRenderingEffectSetting *renderSetting3 =
       [FIRIAMRenderingEffectSetting getDefaultRenderingEffectSetting];
@@ -193,7 +207,7 @@ CGFloat FETCH_MIN_INTERVALS = 1;
                                                                    fetchWaitTimeFromResponse,
                                                                    [NSNull null], [NSNull null],
                                                                    nil])]);
-  [self.flow checkAndFetch];
+  [self.flow checkAndFetchForInitialAppLaunch:NO];
 
   // We expect m1 and m2 to be dumped into clientMessageCache.
   NSArray<FIRIAMMessageDefinition *> *foundMessages = [self.clientMessageCache allRegularMessages];
@@ -229,7 +243,7 @@ CGFloat FETCH_MIN_INTERVALS = 1;
   // We don't expect fetchMessages: for self.mockMessageFetcher to be triggred
   OCMReject([self.mockMessageFetcher fetchMessagesWithImpressionList:[OCMArg any]
                                                       withCompletion:[OCMArg any]]);
-  [self.flow checkAndFetch];
+  [self.flow checkAndFetchForInitialAppLaunch:NO];
 
   NSArray<FIRIAMMessageDefinition *> *foundMessages = [self.clientMessageCache allRegularMessages];
   XCTAssertEqual(0, foundMessages.count);
@@ -250,7 +264,7 @@ CGFloat FETCH_MIN_INTERVALS = 1;
   OCMStub([self.mockBookkeeper nextFetchWaitTime]).andReturn(1000);
   OCMStub([self.mockTimeFetcher currentTimestampInSeconds]).andReturn(100);
 
-  [self.flow checkAndFetch];
+  [self.flow checkAndFetchForInitialAppLaunch:YES];
 
   // we expect m1 and m2 to be dumped into clientMessageCache
   NSArray<FIRIAMMessageDefinition *> *foundMessages = [self.clientMessageCache allRegularMessages];
@@ -260,6 +274,9 @@ CGFloat FETCH_MIN_INTERVALS = 1;
 
   // we expect to register a fetch with sdk manager
   OCMVerify([self.mockSDKModeManager registerOneMoreFetch]);
+
+  // we expect that the message cache is checked for app launch messages
+  OCMVerify([self.flow checkForAppLaunchMessage]);
 }
 
 // Fetch always in testing app instance mode
@@ -276,7 +293,7 @@ CGFloat FETCH_MIN_INTERVALS = 1;
   OCMStub([self.mockBookkeeper nextFetchWaitTime]).andReturn(1000);
   OCMStub([self.mockTimeFetcher currentTimestampInSeconds]).andReturn(100);
 
-  [self.flow checkAndFetch];
+  [self.flow checkAndFetchForInitialAppLaunch:NO];
 
   // we expect m1 and m2 to be dumped into clientMessageCache
   NSArray<FIRIAMMessageDefinition *> *foundMessages = [self.clientMessageCache allRegularMessages];
@@ -304,7 +321,7 @@ CGFloat FETCH_MIN_INTERVALS = 1;
   // 100 seconds is larger than FETCH_MIN_INTERVALS minutes
   OCMStub([self.mockTimeFetcher currentTimestampInSeconds]).andReturn(100);
 
-  [self.flow checkAndFetch];
+  [self.flow checkAndFetchForInitialAppLaunch:NO];
 
   // Expecting turning sdk mode into a testing instance
   OCMVerify([self.mockSDKModeManager becomeTestingInstance]);
@@ -326,6 +343,6 @@ CGFloat FETCH_MIN_INTERVALS = 1;
   OCMStub([self.mockTimeFetcher currentTimestampInSeconds]).andReturn(1000);
   OCMReject([self.mockSDKModeManager becomeTestingInstance]);
 
-  [self.flow checkAndFetch];
+  [self.flow checkAndFetchForInitialAppLaunch:NO];
 }
 @end

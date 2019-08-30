@@ -29,6 +29,8 @@
 
 #include "Firestore/core/src/firebase/firestore/core/transaction.h"
 #include "Firestore/core/src/firebase/firestore/model/document_key_set.h"
+#include "Firestore/core/src/firebase/firestore/model/mutation_batch.h"
+#include "Firestore/core/src/firebase/firestore/model/mutation_batch_result.h"
 #include "Firestore/core/src/firebase/firestore/model/snapshot_version.h"
 #include "Firestore/core/src/firebase/firestore/model/types.h"
 #include "Firestore/core/src/firebase/firestore/remote/datastore.h"
@@ -41,9 +43,6 @@
 #include "Firestore/core/src/firebase/firestore/util/status.h"
 
 @class FSTLocalStore;
-@class FSTMutationBatch;
-@class FSTMutationBatchResult;
-@class FSTQueryData;
 @class FSTTransaction;
 
 NS_ASSUME_NONNULL_BEGIN
@@ -83,7 +82,8 @@ NS_ASSUME_NONNULL_BEGIN
  * removing the batch from the mutation queue.
  */
 - (void)applySuccessfulWriteWithResult:
-    (FSTMutationBatchResult*)batchResult;  // NOLINT(readability/casting)
+    (const model::MutationBatchResult&)
+        batchResult;  // NOLINT(readability/casting)
 
 /**
  * Rejects the batch, removing the batch from the mutation queue, recomputing
@@ -115,7 +115,7 @@ class RemoteStore : public TargetMetadataProvider,
  public:
   RemoteStore(FSTLocalStore* local_store,
               std::shared_ptr<Datastore> datastore,
-              util::AsyncQueue* worker_queue,
+              const std::shared_ptr<util::AsyncQueue>& worker_queue,
               std::function<void(model::OnlineState)> online_state_handler);
 
   void set_sync_engine(id<FSTRemoteSyncer> sync_engine) {
@@ -146,6 +146,8 @@ class RemoteStore : public TargetMetadataProvider,
    */
   void EnableNetwork();
 
+  bool CanUseNetwork() const;
+
   /**
    * Tells the `RemoteStore` that the currently authenticated user has changed.
    *
@@ -155,8 +157,8 @@ class RemoteStore : public TargetMetadataProvider,
    */
   void HandleCredentialChange();
 
-  /** Listens to the target identified by the given `FSTQueryData`. */
-  void Listen(FSTQueryData* query_data);
+  /** Listens to the target identified by the given `QueryData`. */
+  void Listen(const local::QueryData& query_data);
 
   /** Stops listening to the target with the given target ID. */
   void StopListening(model::TargetId target_id);
@@ -175,7 +177,7 @@ class RemoteStore : public TargetMetadataProvider,
    * Queues additional writes to be sent to the write stream, sending them
    * immediately if the write stream is established.
    */
-  void AddToWritePipeline(FSTMutationBatch* batch);
+  void AddToWritePipeline(const model::MutationBatch& batch);
 
   /** Returns a new transaction backed by this remote store. */
   // TODO(c++14): return a plain value when it becomes possible to move
@@ -184,7 +186,8 @@ class RemoteStore : public TargetMetadataProvider,
 
   model::DocumentKeySet GetRemoteKeysForTarget(
       model::TargetId target_id) const override;
-  FSTQueryData* GetQueryDataForTarget(model::TargetId target_id) const override;
+  absl::optional<local::QueryData> GetQueryDataForTarget(
+      model::TargetId target_id) const override;
 
   void OnWatchStreamOpen() override;
   void OnWatchStreamChange(
@@ -197,12 +200,12 @@ class RemoteStore : public TargetMetadataProvider,
   void OnWriteStreamClose(const util::Status& status) override;
   void OnWriteStreamMutationResult(
       model::SnapshotVersion commit_version,
-      std::vector<FSTMutationResult*> mutation_results) override;
+      std::vector<model::MutationResult> mutation_results) override;
 
  private:
   void DisableNetworkInternal();
 
-  void SendWatchRequest(FSTQueryData* query_data);
+  void SendWatchRequest(const local::QueryData& query_data);
   void SendUnwatchRequest(model::TargetId target_id);
 
   /**
@@ -230,8 +233,6 @@ class RemoteStore : public TargetMetadataProvider,
 
   void HandleHandshakeError(const util::Status& status);
   void HandleWriteError(const util::Status& status);
-
-  bool CanUseNetwork() const;
 
   void StartWatchStream();
 
@@ -263,7 +264,7 @@ class RemoteStore : public TargetMetadataProvider,
    * to the server. The targets removed with unlistens are removed eagerly
    * without waiting for confirmation from the listen stream.
    */
-  std::unordered_map<model::TargetId, FSTQueryData*> listen_targets_;
+  std::unordered_map<model::TargetId, local::QueryData> listen_targets_;
 
   OnlineStateTracker online_state_tracker_;
 
@@ -294,7 +295,7 @@ class RemoteStore : public TargetMetadataProvider,
    * purely based on order, and so we can just remove writes from the front of
    * the `write_pipeline_` as we receive responses.
    */
-  std::vector<FSTMutationBatch*> write_pipeline_;
+  std::vector<model::MutationBatch> write_pipeline_;
 };
 
 }  // namespace remote

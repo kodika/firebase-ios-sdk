@@ -37,8 +37,8 @@ class MockWriteStream;
 class MockDatastore : public Datastore {
  public:
   MockDatastore(const core::DatabaseInfo& database_info,
-                util::AsyncQueue* worker_queue,
-                auth::CredentialsProvider* credentials);
+                const std::shared_ptr<util::AsyncQueue>& worker_queue,
+                std::shared_ptr<auth::CredentialsProvider> credentials);
 
   std::shared_ptr<WatchStream> CreateWatchStream(WatchStreamCallback* callback) override;
   std::shared_ptr<WriteStream> CreateWriteStream(WriteStreamCallback* callback) override;
@@ -71,19 +71,19 @@ class MockDatastore : public Datastore {
   void FailWatchStream(const util::Status& error);
 
   /** Returns the set of active targets on the watch stream. */
-  const std::unordered_map<model::TargetId, FSTQueryData*>& ActiveTargets() const;
+  const std::unordered_map<model::TargetId, local::QueryData>& ActiveTargets() const;
   /** Helper method to expose watch stream state to verify in tests. */
   bool IsWatchStreamOpen() const;
 
   /**
    * Returns the next write that was "sent to the backend", failing if there are no queued sent
    */
-  std::vector<FSTMutation*> NextSentWrite();
+  std::vector<model::Mutation> NextSentWrite();
   /** Returns the number of writes that have been sent to the backend but not waited on yet. */
   int WritesSent() const;
 
   /** Injects a write ack as though it had come from the backend in response to a write. */
-  void AckWrite(const model::SnapshotVersion& version, std::vector<FSTMutationResult*> results);
+  void AckWrite(const model::SnapshotVersion& version, std::vector<model::MutationResult> results);
 
   /** Injects a stream failure as though it had come from the backend. */
   void FailWrite(const util::Status& error);
@@ -92,8 +92,8 @@ class MockDatastore : public Datastore {
   // These are all passed to the base class; however, making `MockDatastore` store the pointers
   // reduces the number of test-only methods in `Datastore`.
   const core::DatabaseInfo* database_info_ = nullptr;
-  util::AsyncQueue* worker_queue_ = nullptr;
-  auth::CredentialsProvider* credentials_ = nullptr;
+  std::shared_ptr<util::AsyncQueue> worker_queue_;
+  std::shared_ptr<auth::CredentialsProvider> credentials_;
 
   std::shared_ptr<MockWatchStream> watch_stream_;
   std::shared_ptr<MockWriteStream> write_stream_;

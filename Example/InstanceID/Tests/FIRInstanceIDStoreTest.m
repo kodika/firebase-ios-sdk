@@ -20,28 +20,21 @@
 #import "FIRInstanceIDFakeKeychain.h"
 #import "Firebase/InstanceID/FIRInstanceIDBackupExcludedPlist.h"
 #import "Firebase/InstanceID/FIRInstanceIDCheckinPreferences+Internal.h"
-#import "Firebase/InstanceID/FIRInstanceIDCheckinPreferences.h"
 #import "Firebase/InstanceID/FIRInstanceIDCheckinService.h"
 #import "Firebase/InstanceID/FIRInstanceIDCheckinStore.h"
 #import "Firebase/InstanceID/FIRInstanceIDStore.h"
 #import "Firebase/InstanceID/FIRInstanceIDTokenInfo.h"
 #import "Firebase/InstanceID/FIRInstanceIDTokenStore.h"
 #import "Firebase/InstanceID/FIRInstanceIDUtilities.h"
+#import "Firebase/InstanceID/Private/FIRInstanceIDCheckinPreferences.h"
 
-static NSString *const kApplicationSupportSubDirectoryName = @"FirebaseInstanceIDStoreTest";
+static NSString *const kSubDirectoryName = @"FirebaseInstanceIDStoreTest";
 
 static NSString *const kAuthorizedEntity = @"test-audience";
 static NSString *const kScope = @"test-scope";
 static NSString *const kToken = @"test-token";
-static NSString *const kKey = @"test-key";
-static NSString *const kTimeSuffix = @"-time";
 static NSString *const kAuthID = @"test-auth-id";
 static NSString *const kSecret = @"test-secret";
-
-// This should stay in sync with the same constant name in FIRInstanceIDStore.
-// We don't want to make a new method in FIRInstanceIDStore to avoid adding
-// binary bloat.
-static NSString *const kFIRInstanceIDAPNSTokenKey = @"APNSTuple";
 
 @interface FIRInstanceIDStore ()
 
@@ -60,13 +53,13 @@ static NSString *const kFIRInstanceIDAPNSTokenKey = @"APNSTuple";
 
 @interface FIRInstanceIDStoreTest : XCTestCase
 
-@property(nonatomic) FIRInstanceIDStore *instanceIDStore;
-@property(nonatomic) FIRInstanceIDBackupExcludedPlist *checkinPlist;
-@property(nonatomic) FIRInstanceIDCheckinStore *checkinStore;
-@property(nonatomic) FIRInstanceIDTokenStore *tokenStore;
-@property(nonatomic) id mockCheckinStore;
-@property(nonatomic) id mockTokenStore;
-@property(nonatomic) id mockInstanceIDStore;
+@property(strong, nonatomic) FIRInstanceIDStore *instanceIDStore;
+@property(strong, nonatomic) FIRInstanceIDBackupExcludedPlist *checkinPlist;
+@property(strong, nonatomic) FIRInstanceIDCheckinStore *checkinStore;
+@property(strong, nonatomic) FIRInstanceIDTokenStore *tokenStore;
+@property(strong, nonatomic) id mockCheckinStore;
+@property(strong, nonatomic) id mockTokenStore;
+@property(strong, nonatomic) id mockInstanceIDStore;
 
 @end
 
@@ -74,12 +67,11 @@ static NSString *const kFIRInstanceIDAPNSTokenKey = @"APNSTuple";
 
 - (void)setUp {
   [super setUp];
-  [FIRInstanceIDStore createApplicationSupportSubDirectory:kApplicationSupportSubDirectoryName];
+  [FIRInstanceIDStore createSubDirectory:kSubDirectoryName];
 
   NSString *checkinPlistName = @"com.google.test.IIDStoreTestCheckin";
-  self.checkinPlist = [[FIRInstanceIDBackupExcludedPlist alloc]
-                    initWithFileName:checkinPlistName
-      applicationSupportSubDirectory:kApplicationSupportSubDirectoryName];
+  self.checkinPlist = [[FIRInstanceIDBackupExcludedPlist alloc] initWithFileName:checkinPlistName
+                                                                    subDirectory:kSubDirectoryName];
 
   // checkin store
   FIRInstanceIDFakeKeychain *fakeKeychain = [[FIRInstanceIDFakeKeychain alloc] init];
@@ -103,8 +95,7 @@ static NSString *const kFIRInstanceIDAPNSTokenKey = @"APNSTuple";
 - (void)tearDown {
   [self.instanceIDStore removeAllCachedTokensWithHandler:nil];
   [self.instanceIDStore removeCheckinPreferencesWithHandler:nil];
-  [FIRInstanceIDStore removeApplicationSupportSubDirectory:kApplicationSupportSubDirectoryName
-                                                     error:nil];
+  [FIRInstanceIDStore removeSubDirectory:kSubDirectoryName error:nil];
   [_mockCheckinStore stopMocking];
   [_mockTokenStore stopMocking];
   [_mockInstanceIDStore stopMocking];
@@ -253,13 +244,13 @@ static NSString *const kFIRInstanceIDAPNSTokenKey = @"APNSTuple";
 }
 
 - (void)testResetCredentialsWithNoCachedCheckin {
-  _mockCheckinStore = [OCMockObject niceMockForClass:[FIRInstanceIDCheckinStore class]];
-  [[_mockCheckinStore reject]
+  id niceMockCheckinStore = [OCMockObject niceMockForClass:[FIRInstanceIDCheckinStore class]];
+  [[niceMockCheckinStore reject]
       removeCheckinPreferencesWithHandler:[OCMArg invokeBlockWithArgs:[NSNull null], nil]];
   // Always setting up stub after expect.
   OCMStub([_checkinStore cachedCheckinPreferences]).andReturn(nil);
 
   [_instanceIDStore resetCredentialsIfNeeded];
-  OCMVerifyAll(_mockCheckinStore);
+  OCMVerifyAll(niceMockCheckinStore);
 }
 @end

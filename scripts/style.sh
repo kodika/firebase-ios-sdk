@@ -137,6 +137,13 @@ s%^./%%
 \%^Debug/% d
 \%^Release/% d
 
+# pod gen output
+\%^gen/% d
+
+# Firestore/Swift contains code that is under 'third_party' but should be
+# formatted.
+\%Firestore/Swift/% p
+
 # Sources controlled outside this tree
 \%/third_party/% d
 \%/Firestore/Port/% d
@@ -148,7 +155,7 @@ s%^./%%
 \%/vendor/bundle/% d
 
 # Sources within the tree that are not subject to formatting
-\%^(Example|Firebase)/(Auth|AuthSamples|Database|Messaging)/% d
+\%^(Example|Firebase)/(Auth|AuthSamples|Messaging)/% d
 
 # Checked-in generated code
 \%\.pb(objc|rpc)\.% d

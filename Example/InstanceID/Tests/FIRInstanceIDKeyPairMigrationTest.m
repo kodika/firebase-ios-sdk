@@ -30,7 +30,7 @@
 @interface FIRInstanceIDKeyPairStore (ExposedForTest)
 
 @property(nonatomic, readwrite, strong) FIRInstanceIDBackupExcludedPlist *plist;
-@property(nonatomic, readwrite, strong) FIRInstanceIDKeyPair *keyPair;
+@property(atomic, readwrite, strong) FIRInstanceIDKeyPair *keyPair;
 BOOL FIRInstanceIDHasMigratedKeyPair(NSString *legacyPublicKeyTag, NSString *newPublicKeyTag);
 NSString *FIRInstanceIDLegacyPublicTagWithSubtype(NSString *subtype);
 NSString *FIRInstanceIDLegacyPrivateTagWithSubtype(NSString *subtype);
@@ -44,6 +44,10 @@ NSString *FIRInstanceIDPrivateTagWithSubtype(NSString *subtype);
                             handler:(void (^)(NSError *))handler;
 - (void)migrateKeyPairCacheIfNeededWithHandler:(void (^)(NSError *error))handler;
 + (NSString *)keyStoreFileName;
+
+- (void)updateKeyRef:(SecKeyRef)keyRef
+             withTag:(NSString *)tag
+             handler:(void (^)(NSError *error))handler;
 @end
 
 // Need to separate the tests from FIRInstanceIDKeyPairStoreTest for separate keychain operations
@@ -66,9 +70,13 @@ NSString *FIRInstanceIDPrivateTagWithSubtype(NSString *subtype);
   [super tearDown];
   NSError *error = nil;
   [self.keyPairStore removeKeyPairCreationTimePlistWithError:&error];
+
+  // TODO: Real FIRInstanceIDKeychain should not be used for the tests, it should be mocked instead.
+  // Drain Keychain private queue before exiting.
+  [[FIRInstanceIDKeychain sharedInstance] itemWithQuery:@{}];
 }
 
-- (void)testMigrationDataIfLegtacyKeyPairsNotExist {
+- (void)testMigrationDataIfLegacyKeyPairsNotExist {
   NSString *legacyPublicKeyTag =
       FIRInstanceIDLegacyPublicTagWithSubtype(kFIRInstanceIDKeyPairSubType);
 
@@ -86,8 +94,12 @@ NSString *FIRInstanceIDPrivateTagWithSubtype(NSString *subtype);
 }
 
 - (void)testMigrationIfLegacyKeyPairsExist {
+// Legacy keypair should only exist in iOS/tvOS.
+#if TARGET_OS_IOS || TARGET_OS_TV
   XCTestExpectation *migrationCompleteExpectation =
       [self expectationWithDescription:@"migration should be done"];
+  XCTestExpectation *deletionCompleteExpectation =
+      [self expectationWithDescription:@"keychain should be cleared"];
   // create legacy key pairs
   NSString *legacyPublicKeyTag =
       FIRInstanceIDLegacyPublicTagWithSubtype(kFIRInstanceIDKeyPairSubType);
@@ -123,15 +135,71 @@ NSString *FIRInstanceIDPrivateTagWithSubtype(NSString *subtype);
     XCTAssertEqualObjects(keyPair.publicKeyData, keyPair2.publicKeyData);
     XCTAssertEqualObjects(keyPair.privateKeyData, keyPair2.privateKeyData);
 
-    // Clear the legacy data after tests
+    // Clear the keychain data after tests
     [FIRInstanceIDKeyPairStore deleteKeyPairWithPrivateTag:legacyPrivateKeyTag
                                                  publicTag:legacyPublicKeyTag
                                                    handler:^(NSError *error) {
                                                      XCTAssertNil(error);
                                                      [migrationCompleteExpectation fulfill];
                                                    }];
+    [FIRInstanceIDKeyPairStore deleteKeyPairWithPrivateTag:privateKeyTag
+                                                 publicTag:publicKeyTag
+                                                   handler:^(NSError *error) {
+                                                     XCTAssertNil(error);
+                                                     [deletionCompleteExpectation fulfill];
+                                                   }];
   }];
 
-  [self waitForExpectationsWithTimeout:1000 handler:nil];
+  [self waitForExpectations:@[ migrationCompleteExpectation, deletionCompleteExpectation ]
+                    timeout:10.0];
+#endif
 }
+
+#if (TARGET_OS_IOS || TARGET_OS_TV) && !defined(TARGET_OS_MACCATALYST)
+- (void)testUpdateKeyRefWithTagRetainsAndReleasesKeyRef {
+  __weak id weakKeyRef;
+
+  // Use a local autorelease pool to make sure any autorelease objects allocated will be released.
+  @autoreleasepool {
+    SecKeyRef keyRef = [self generateKeyRef];
+    weakKeyRef = (__bridge id)(keyRef);
+    XCTestExpectation *completionExpectation =
+        [self expectationWithDescription:@"completionExpectation"];
+    [self.keyPairStore updateKeyRef:keyRef
+                            withTag:@"test"
+                            handler:^(NSError *error) {
+                              [completionExpectation fulfill];
+                            }];
+
+    // Release locally allocated CoreFoundation object.
+    CFRelease(keyRef);
+  }
+
+  // Should be still alive until execution finished
+  XCTAssertNotNil(weakKeyRef);
+  [self waitForExpectationsWithTimeout:0.5 handler:NULL];
+
+  // Should be released once finished
+  // The check below is flaky for build under DEBUG (petentially due to ARC specifics).
+  // Comment it so far as not-so-important one.
+  //  XCTAssertNil(weakKeyRef);
+}
+
+- (SecKeyRef)generateKeyRef {
+  NSDictionary *keyAttributes = @{(__bridge id)kSecAttrIsPermanent : @YES};
+  NSDictionary *keyPairAttributes = @{
+    (__bridge id)kSecAttrKeyType : (__bridge id)kSecAttrKeyTypeRSA,
+    (__bridge id)kSecAttrLabel : @"[FIRInstanceIDKeyPairMigrationTest generateKeyRef]",
+    (__bridge id)kSecAttrKeySizeInBits : @(2048),
+    (__bridge id)kSecPrivateKeyAttrs : keyAttributes,
+    (__bridge id)kSecPublicKeyAttrs : keyAttributes,
+  };
+
+  SecKeyRef publicKey = NULL;
+  SecKeyGeneratePair((__bridge CFDictionaryRef)keyPairAttributes, &publicKey, NULL);
+
+  return publicKey;
+}
+#endif  // (TARGET_OS_IOS || TARGET_OS_TV) && !defined(TARGET_OS_MACCATALYST)
+
 @end

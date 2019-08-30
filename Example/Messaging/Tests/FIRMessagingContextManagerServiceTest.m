@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
+#import <OCMock/OCMock.h>
 #import <XCTest/XCTest.h>
 
-#import <OCMock/OCMock.h>
-
-#import "FIRMessagingContextManagerService.h"
+#import "Firebase/Messaging/FIRMessagingContextManagerService.h"
 
 @interface FIRMessagingContextManagerServiceTest : XCTestCase
 
@@ -71,6 +70,7 @@
  *  Context Manager message with future start date should be successfully scheduled.
  */
 - (void)testMessageWithFutureStartTime {
+#if TARGET_OS_IOS
   NSString *messageIdentifier = @"fcm-cm-test1";
   NSString *startTimeString = @"2020-01-12 12:00:00";  // way into the future
   NSDictionary *message = @{
@@ -83,15 +83,18 @@
   XCTAssertTrue([FIRMessagingContextManagerService handleContextManagerMessage:message]);
 
   XCTAssertEqual(self.scheduledLocalNotifications.count, 1);
+
   UILocalNotification *notification = [self.scheduledLocalNotifications firstObject];
   NSDate *date = [self.dateFormatter dateFromString:startTimeString];
   XCTAssertEqual([notification.fireDate compare:date], NSOrderedSame);
+#endif
 }
 
 /**
  *  Context Manager message with past end date should not be scheduled.
  */
 - (void)testMessageWithPastEndTime {
+#if TARGET_OS_IOS
   NSString *messageIdentifier = @"fcm-cm-test1";
   NSString *startTimeString = @"2010-01-12 12:00:00";  // way into the past
   NSString *endTimeString = @"2011-01-12 12:00:00";  // way into the past
@@ -105,6 +108,7 @@
 
   XCTAssertTrue([FIRMessagingContextManagerService handleContextManagerMessage:message]);
   XCTAssertEqual(self.scheduledLocalNotifications.count, 0);
+#endif
 }
 
 /**
@@ -112,6 +116,7 @@
  *  scheduled.
  */
 - (void)testMessageWithPastStartAndFutureEndTime {
+#if TARGET_OS_IOS
   NSString *messageIdentifier = @"fcm-cm-test1";
   NSDate *startDate = [NSDate dateWithTimeIntervalSinceNow:-1000];  // past
   NSDate *endDate = [NSDate dateWithTimeIntervalSinceNow:1000];  // future
@@ -134,12 +139,14 @@
   XCTAssertEqual([notification.fireDate compare:startDate], NSOrderedDescending);
   // schedule notification after end date
   XCTAssertEqual([notification.fireDate compare:endDate], NSOrderedAscending);
+#endif
 }
 
 /**
  *  Test correctly parsing user data in local notifications.
  */
 - (void)testTimedNotificationsUserInfo {
+#if TARGET_OS_IOS
   NSString *messageIdentifierKey = @"message.id";
   NSString *messageIdentifier = @"fcm-cm-test1";
   NSString *startTimeString = @"2020-01-12 12:00:00";  // way into the future
@@ -159,11 +166,14 @@
   UILocalNotification *notification = [self.scheduledLocalNotifications firstObject];
   XCTAssertEqualObjects(notification.userInfo[messageIdentifierKey], messageIdentifier);
   XCTAssertEqualObjects(notification.userInfo[customDataKey], customData);
+#endif
+
 }
 
 #pragma mark - Private Helpers
 
 - (void)mockSchedulingLocalNotifications {
+#if TARGET_OS_IOS
   id mockApplication = OCMPartialMock([UIApplication sharedApplication]);
   __block UILocalNotification *notificationToSchedule;
   [[[mockApplication stub]
@@ -179,6 +189,7 @@
         }
         return NO;
       }]];
+#endif
 }
 
 @end

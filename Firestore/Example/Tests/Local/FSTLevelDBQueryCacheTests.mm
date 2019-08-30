@@ -14,17 +14,15 @@
  * limitations under the License.
  */
 
-#import "Firestore/Source/Core/FSTQuery.h"
 #import "Firestore/Source/Local/FSTLevelDB.h"
-#import "Firestore/Source/Local/FSTQueryData.h"
 
 #import "Firestore/Example/Tests/Local/FSTPersistenceTestHelpers.h"
 #import "Firestore/Example/Tests/Local/FSTQueryCacheTests.h"
 
 #include "Firestore/core/include/firebase/firestore/timestamp.h"
 #include "Firestore/core/src/firebase/firestore/local/leveldb_query_cache.h"
+#include "Firestore/core/src/firebase/firestore/local/query_data.h"
 #include "Firestore/core/src/firebase/firestore/local/reference_set.h"
-#include "Firestore/core/src/firebase/firestore/model/database_id.h"
 #include "Firestore/core/src/firebase/firestore/model/document_key.h"
 #include "Firestore/core/src/firebase/firestore/model/resource_path.h"
 #include "Firestore/core/src/firebase/firestore/model/snapshot_version.h"
@@ -33,14 +31,16 @@
 namespace testutil = firebase::firestore::testutil;
 using firebase::Timestamp;
 using firebase::firestore::local::LevelDbQueryCache;
+using firebase::firestore::local::QueryData;
+using firebase::firestore::local::QueryPurpose;
 using firebase::firestore::local::ReferenceSet;
-using firebase::firestore::model::DatabaseId;
 using firebase::firestore::model::DocumentKey;
 using firebase::firestore::model::ListenSequenceNumber;
 using firebase::firestore::model::ResourcePath;
 using firebase::firestore::model::SnapshotVersion;
 using firebase::firestore::model::TargetId;
 using firebase::firestore::util::Path;
+using testutil::Query;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -93,11 +93,9 @@ NS_ASSUME_NONNULL_BEGIN
   SnapshotVersion lastVersion(Timestamp(1, 2));
 
   db1.run("add query data", [&]() {
-    FSTQuery *query = [FSTQuery queryWithPath:ResourcePath{"some", "path"}];
-    FSTQueryData *queryData = [[FSTQueryData alloc] initWithQuery:query
-                                                         targetID:lastTargetId
-                                             listenSequenceNumber:minimumSequenceNumber
-                                                          purpose:FSTQueryPurposeListen];
+    core::Query query = Query("some/path");
+    QueryData queryData(std::move(query), lastTargetId, minimumSequenceNumber,
+                        QueryPurpose::Listen);
     queryCache->AddTarget(queryData);
     queryCache->SetLastRemoteSnapshotVersion(lastVersion);
   });

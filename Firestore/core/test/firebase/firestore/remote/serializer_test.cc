@@ -36,14 +36,18 @@
 #include "Firestore/Protos/cpp/google/firestore/v1/firestore.pb.h"
 #include "Firestore/core/include/firebase/firestore/firestore_errors.h"
 #include "Firestore/core/include/firebase/firestore/timestamp.h"
+#include "Firestore/core/src/firebase/firestore/model/field_path.h"
 #include "Firestore/core/src/firebase/firestore/model/field_value.h"
+#include "Firestore/core/src/firebase/firestore/model/set_mutation.h"
 #include "Firestore/core/src/firebase/firestore/model/snapshot_version.h"
 #include "Firestore/core/src/firebase/firestore/nanopb/reader.h"
 #include "Firestore/core/src/firebase/firestore/nanopb/writer.h"
 #include "Firestore/core/src/firebase/firestore/timestamp_internal.h"
 #include "Firestore/core/src/firebase/firestore/util/status.h"
 #include "Firestore/core/src/firebase/firestore/util/statusor.h"
+#include "Firestore/core/test/firebase/firestore/nanopb/nanopb_testing.h"
 #include "Firestore/core/test/firebase/firestore/testutil/testutil.h"
+#include "Firestore/core/test/firebase/firestore/util/status_testing.h"
 #include "absl/types/optional.h"
 #include "google/protobuf/stubs/common.h"
 #include "google/protobuf/util/message_differencer.h"
@@ -54,29 +58,28 @@ namespace firestore {
 namespace remote {
 
 namespace v1 = google::firestore::v1;
-using firebase::Timestamp;
-using firebase::TimestampInternal;
-using firebase::firestore::FirestoreErrorCode;
-using firebase::firestore::model::DatabaseId;
-using firebase::firestore::model::Document;
-using firebase::firestore::model::DocumentKey;
-using firebase::firestore::model::FieldValue;
-using firebase::firestore::model::MaybeDocument;
-using firebase::firestore::model::NoDocument;
-using firebase::firestore::model::ObjectValue;
-using firebase::firestore::model::SnapshotVersion;
-using firebase::firestore::nanopb::Reader;
-using firebase::firestore::nanopb::Writer;
-using firebase::firestore::remote::Serializer;
-using firebase::firestore::testutil::Key;
-using firebase::firestore::util::Status;
-using firebase::firestore::util::StatusOr;
 using google::protobuf::util::MessageDifferencer;
-
-#define ASSERT_OK(status) ASSERT_TRUE(StatusOk(status))
-#define ASSERT_NOT_OK(status) ASSERT_FALSE(StatusOk(status))
-#define EXPECT_OK(status) EXPECT_TRUE(StatusOk(status))
-#define EXPECT_NOT_OK(status) EXPECT_FALSE(StatusOk(status))
+using model::DatabaseId;
+using model::Document;
+using model::DocumentKey;
+using model::FieldValue;
+using model::MaybeDocument;
+using model::Mutation;
+using model::NoDocument;
+using model::ObjectValue;
+using model::SetMutation;
+using model::SnapshotVersion;
+using nanopb::ByteString;
+using nanopb::ByteStringWriter;
+using nanopb::ProtobufParse;
+using nanopb::ProtobufSerialize;
+using nanopb::Reader;
+using nanopb::Writer;
+using remote::Serializer;
+using testutil::Key;
+using testutil::Map;
+using util::Status;
+using util::StatusOr;
 
 TEST(Serializer, CanLinkToNanopb) {
   // This test doesn't actually do anything interesting as far as actually using
@@ -89,11 +92,10 @@ TEST(Serializer, CanLinkToNanopb) {
 // Fixture for running serializer tests.
 class SerializerTest : public ::testing::Test {
  public:
-  SerializerTest() : serializer(kDatabaseId) {
+  SerializerTest() : serializer(DatabaseId("p", "d")) {
     msg_diff.ReportDifferencesToString(&message_differences);
   }
 
-  const DatabaseId kDatabaseId{"p", "d"};
   Serializer serializer;
 
   template <typename... Args>
@@ -117,40 +119,15 @@ class SerializerTest : public ::testing::Test {
   }
 
   /**
-   * Checks the status. Don't use directly; use one of the relevant macros
-   * instead. eg:
-   *
-   *   Status good_status = ...;
-   *   ASSERT_OK(good_status);
-   *
-   *   Status bad_status = ...;
-   *   EXPECT_NOT_OK(bad_status);
-   */
-  testing::AssertionResult StatusOk(const Status& status) {
-    if (!status.ok()) {
-      return testing::AssertionFailure()
-             << "Status should have been ok, but instead contained "
-             << status.ToString();
-    }
-    return testing::AssertionSuccess();
-  }
-
-  template <typename T>
-  testing::AssertionResult StatusOk(const StatusOr<T>& status) {
-    return StatusOk(status.status());
-  }
-
-  /**
    * Ensures that decoding fails with the given status.
    *
    * @param status the expected (failed) status. Only the code() is verified.
    */
   void ExpectFailedStatusDuringFieldValueDecode(
       Status status, const std::vector<uint8_t>& bytes) {
-    Reader reader = Reader::Wrap(bytes.data(), bytes.size());
+    Reader reader(bytes);
 
-    google_firestore_v1_Value nanopb_proto =
-        google_firestore_v1_Value_init_zero;
+    google_firestore_v1_Value nanopb_proto{};
     reader.ReadNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
     serializer.DecodeFieldValue(&reader, nanopb_proto);
     reader.FreeNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
@@ -159,11 +136,10 @@ class SerializerTest : public ::testing::Test {
     EXPECT_EQ(status.code(), reader.status().code());
   }
 
-  void ExpectFailedStatusDuringMaybeDocumentDecode(
-      Status status, const std::vector<uint8_t>& bytes) {
-    Reader reader = Reader::Wrap(bytes.data(), bytes.size());
-    google_firestore_v1_BatchGetDocumentsResponse nanopb_proto =
-        google_firestore_v1_BatchGetDocumentsResponse_init_zero;
+  void ExpectFailedStatusDuringMaybeDocumentDecode(Status status,
+                                                   const ByteString& bytes) {
+    Reader reader(bytes);
+    google_firestore_v1_BatchGetDocumentsResponse nanopb_proto{};
     reader.ReadNanopbMessage(
         google_firestore_v1_BatchGetDocumentsResponse_fields, &nanopb_proto);
     serializer.DecodeMaybeDocument(&reader, nanopb_proto);
@@ -173,36 +149,36 @@ class SerializerTest : public ::testing::Test {
     EXPECT_EQ(status.code(), reader.status().code());
   }
 
-  v1::Value ValueProto(std::nullptr_t) {
-    std::vector<uint8_t> bytes =
-        EncodeFieldValue(&serializer, FieldValue::Null());
-    v1::Value proto;
-    bool ok =
-        proto.ParseFromArray(bytes.data(), static_cast<int>(bytes.size()));
-    EXPECT_TRUE(ok);
-    return proto;
-  }
-
-  std::vector<uint8_t> EncodeFieldValue(Serializer* serializer,
-                                        const FieldValue& fv) {
-    std::vector<uint8_t> bytes;
-    Writer writer = Writer::Wrap(&bytes);
-    google_firestore_v1_Value proto = serializer->EncodeFieldValue(fv);
+  ByteString EncodeFieldValue(const FieldValue& fv) {
+    ByteStringWriter writer;
+    google_firestore_v1_Value proto = serializer.EncodeFieldValue(fv);
     writer.WriteNanopbMessage(google_firestore_v1_Value_fields, &proto);
-    serializer->FreeNanopbMessage(google_firestore_v1_Value_fields, &proto);
-    return bytes;
+    serializer.FreeNanopbMessage(google_firestore_v1_Value_fields, &proto);
+    return writer.Release();
   }
 
-  std::vector<uint8_t> EncodeDocument(Serializer* serializer,
-                                      const DocumentKey& key,
-                                      const FieldValue& value) {
-    std::vector<uint8_t> bytes;
-    Writer writer = Writer::Wrap(&bytes);
-    google_firestore_v1_Document proto =
-        serializer->EncodeDocument(key, value.object_value());
+  ByteString EncodeDocument(const DocumentKey& key, const ObjectValue& value) {
+    ByteStringWriter writer;
+    google_firestore_v1_Document proto = serializer.EncodeDocument(key, value);
     writer.WriteNanopbMessage(google_firestore_v1_Document_fields, &proto);
-    serializer->FreeNanopbMessage(google_firestore_v1_Document_fields, &proto);
-    return bytes;
+    serializer.FreeNanopbMessage(google_firestore_v1_Document_fields, &proto);
+    return writer.Release();
+  }
+
+  ByteString EncodeMutation(const Mutation& mutation) {
+    ByteStringWriter writer;
+    google_firestore_v1_Write proto = serializer.EncodeMutation(mutation);
+    writer.WriteNanopbMessage(google_firestore_v1_Write_fields, &proto);
+    serializer.FreeNanopbMessage(google_firestore_v1_Write_fields, &proto);
+    return writer.Release();
+  }
+
+  void Mutate(pb_bytes_array_t* bytes,
+              size_t offset,
+              uint8_t expected_initial_value,
+              uint8_t new_value) {
+    ASSERT_EQ(bytes->bytes[offset], expected_initial_value);
+    bytes->bytes[offset] = new_value;
   }
 
   void Mutate(uint8_t* byte,
@@ -212,24 +188,30 @@ class SerializerTest : public ::testing::Test {
     *byte = new_value;
   }
 
+  v1::Value ValueProto(std::nullptr_t) {
+    ByteString bytes = EncodeFieldValue(FieldValue::Null());
+    return ProtobufParse<v1::Value>(bytes);
+  }
+
   v1::Value ValueProto(bool b) {
-    std::vector<uint8_t> bytes =
-        EncodeFieldValue(&serializer, FieldValue::FromBoolean(b));
-    v1::Value proto;
-    bool ok =
-        proto.ParseFromArray(bytes.data(), static_cast<int>(bytes.size()));
-    EXPECT_TRUE(ok);
-    return proto;
+    ByteString bytes = EncodeFieldValue(FieldValue::FromBoolean(b));
+    return ProtobufParse<v1::Value>(bytes);
   }
 
   v1::Value ValueProto(int64_t i) {
-    std::vector<uint8_t> bytes =
-        EncodeFieldValue(&serializer, FieldValue::FromInteger(i));
-    v1::Value proto;
-    bool ok =
-        proto.ParseFromArray(bytes.data(), static_cast<int>(bytes.size()));
-    EXPECT_TRUE(ok);
-    return proto;
+    ByteString bytes = EncodeFieldValue(FieldValue::FromInteger(i));
+    return ProtobufParse<v1::Value>(bytes);
+  }
+
+  v1::Value ValueProto(double d) {
+    ByteString bytes = EncodeFieldValue(FieldValue::FromDouble(d));
+    return ProtobufParse<v1::Value>(bytes);
+  }
+
+  // int64_t and double are equally good overloads for integer literals so this
+  // avoids ambiguity
+  v1::Value ValueProto(int i) {
+    return ValueProto(static_cast<int64_t>(i));
   }
 
   v1::Value ValueProto(const char* s) {
@@ -237,23 +219,28 @@ class SerializerTest : public ::testing::Test {
   }
 
   v1::Value ValueProto(const std::string& s) {
-    std::vector<uint8_t> bytes =
-        EncodeFieldValue(&serializer, FieldValue::FromString(s));
-    v1::Value proto;
-    bool ok =
-        proto.ParseFromArray(bytes.data(), static_cast<int>(bytes.size()));
-    EXPECT_TRUE(ok);
-    return proto;
+    ByteString bytes = EncodeFieldValue(FieldValue::FromString(s));
+    return ProtobufParse<v1::Value>(bytes);
   }
 
   v1::Value ValueProto(const Timestamp& ts) {
-    std::vector<uint8_t> bytes =
-        EncodeFieldValue(&serializer, FieldValue::FromTimestamp(ts));
-    v1::Value proto;
-    bool ok =
-        proto.ParseFromArray(bytes.data(), static_cast<int>(bytes.size()));
-    EXPECT_TRUE(ok);
-    return proto;
+    ByteString bytes = EncodeFieldValue(FieldValue::FromTimestamp(ts));
+    return ProtobufParse<v1::Value>(bytes);
+  }
+
+  v1::Value ValueProto(const ByteString& blob) {
+    ByteString bytes = EncodeFieldValue(FieldValue::FromBlob(blob));
+    return ProtobufParse<v1::Value>(bytes);
+  }
+
+  v1::Value ValueProto(const GeoPoint& geo_point) {
+    ByteString bytes = EncodeFieldValue(FieldValue::FromGeoPoint(geo_point));
+    return ProtobufParse<v1::Value>(bytes);
+  }
+
+  v1::Value ValueProto(const std::vector<FieldValue>& array) {
+    ByteString bytes = EncodeFieldValue(FieldValue::FromArray(array));
+    return ProtobufParse<v1::Value>(bytes);
   }
 
   /**
@@ -285,25 +272,19 @@ class SerializerTest : public ::testing::Test {
                                     const v1::Value& proto,
                                     FieldValue::Type type) {
     EXPECT_EQ(type, model.type());
-    std::vector<uint8_t> bytes = EncodeFieldValue(&serializer, model);
-    v1::Value actual_proto;
-    bool ok = actual_proto.ParseFromArray(bytes.data(),
-                                          static_cast<int>(bytes.size()));
-    EXPECT_TRUE(ok);
+    ByteString bytes = EncodeFieldValue(model);
+    auto actual_proto = ProtobufParse<v1::Value>(bytes);
+
     EXPECT_TRUE(msg_diff.Compare(proto, actual_proto)) << message_differences;
   }
 
   void ExpectDeserializationRoundTrip(const FieldValue& model,
                                       const v1::Value& proto,
                                       FieldValue::Type type) {
-    size_t size = proto.ByteSizeLong();
-    std::vector<uint8_t> bytes(size);
-    bool status = proto.SerializeToArray(bytes.data(), static_cast<int>(size));
-    EXPECT_TRUE(status);
-    Reader reader = Reader::Wrap(bytes.data(), bytes.size());
+    ByteString bytes = ProtobufSerialize(proto);
+    Reader reader(bytes);
 
-    google_firestore_v1_Value nanopb_proto =
-        google_firestore_v1_Value_init_zero;
+    google_firestore_v1_Value nanopb_proto{};
     reader.ReadNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
     FieldValue actual_model =
         serializer.DecodeFieldValue(&reader, nanopb_proto);
@@ -316,14 +297,11 @@ class SerializerTest : public ::testing::Test {
 
   void ExpectSerializationRoundTrip(
       const DocumentKey& key,
-      const FieldValue& value,
+      const ObjectValue& value,
       const SnapshotVersion& update_time,
       const v1::BatchGetDocumentsResponse& proto) {
-    std::vector<uint8_t> bytes = EncodeDocument(&serializer, key, value);
-    v1::Document actual_proto;
-    bool ok = actual_proto.ParseFromArray(bytes.data(),
-                                          static_cast<int>(bytes.size()));
-    EXPECT_TRUE(ok);
+    ByteString bytes = EncodeDocument(key, value);
+    auto actual_proto = ProtobufParse<v1::Document>(bytes);
 
     // Note that the client can only serialize Documents (and cannot serialize
     // NoDocuments)
@@ -349,34 +327,28 @@ class SerializerTest : public ::testing::Test {
 
   void ExpectDeserializationRoundTrip(
       const DocumentKey& key,
-      const absl::optional<FieldValue> value,
+      const absl::optional<ObjectValue> value,
       const SnapshotVersion& version,  // either update_time or read_time
       const v1::BatchGetDocumentsResponse& proto) {
-    size_t size = proto.ByteSizeLong();
-    std::vector<uint8_t> bytes(size);
-    bool status = proto.SerializeToArray(bytes.data(), static_cast<int>(size));
-    EXPECT_TRUE(status);
-
-    Reader reader = Reader::Wrap(bytes.data(), bytes.size());
-    google_firestore_v1_BatchGetDocumentsResponse nanopb_proto =
-        google_firestore_v1_BatchGetDocumentsResponse_init_zero;
+    ByteString bytes = ProtobufSerialize(proto);
+    Reader reader(bytes);
+    google_firestore_v1_BatchGetDocumentsResponse nanopb_proto{};
     reader.ReadNanopbMessage(
         google_firestore_v1_BatchGetDocumentsResponse_fields, &nanopb_proto);
-    StatusOr<std::unique_ptr<MaybeDocument>> actual_model_status =
+    StatusOr<MaybeDocument> actual_model_status =
         serializer.DecodeMaybeDocument(&reader, nanopb_proto);
     reader.FreeNanopbMessage(
         google_firestore_v1_BatchGetDocumentsResponse_fields, &nanopb_proto);
 
     EXPECT_OK(actual_model_status);
-    std::unique_ptr<MaybeDocument> actual_model =
-        std::move(actual_model_status).ValueOrDie();
+    MaybeDocument actual_model = std::move(actual_model_status).ValueOrDie();
 
-    EXPECT_EQ(key, actual_model->key());
-    EXPECT_EQ(version, actual_model->version());
-    switch (actual_model->type()) {
+    EXPECT_EQ(key, actual_model.key());
+    EXPECT_EQ(version, actual_model.version());
+    switch (actual_model.type()) {
       case MaybeDocument::Type::Document: {
-        Document* actual_doc_model = static_cast<Document*>(actual_model.get());
-        EXPECT_EQ(value, actual_doc_model->data());
+        Document actual_doc_model(actual_model);
+        EXPECT_EQ(value, actual_doc_model.data());
         break;
       }
       case MaybeDocument::Type::NoDocument:
@@ -388,7 +360,7 @@ class SerializerTest : public ::testing::Test {
         // test for UnknownDocument. However, we'll defer that until after
         // nanopb-master is merged to master.
         abort();
-      case MaybeDocument::Type::Unknown:
+      case MaybeDocument::Type::Invalid:
         FAIL() << "We somehow created an invalid model object";
     }
   }
@@ -421,6 +393,40 @@ TEST_F(SerializerTest, EncodesIntegers) {
   for (int64_t int_value : cases) {
     FieldValue model = FieldValue::FromInteger(int_value);
     ExpectRoundTrip(model, ValueProto(int_value), FieldValue::Type::Integer);
+  }
+}
+
+TEST_F(SerializerTest, EncodesDoubles) {
+  // Not technically required at all. But if we run into a platform where this
+  // is false, then we'll have to eliminate a few of our test cases in this
+  // test.
+  static_assert(std::numeric_limits<double>::is_iec559,
+                "IEC559/IEEE764 floating point required");
+
+  std::vector<double> cases{-std::numeric_limits<double>::infinity(),
+                            std::numeric_limits<double>::lowest(),
+                            std::numeric_limits<int64_t>::min() - 1.0,
+                            -2.0,
+                            -1.1,
+                            -1.0,
+                            -std::numeric_limits<double>::epsilon(),
+                            -std::numeric_limits<double>::min(),
+                            -std::numeric_limits<double>::denorm_min(),
+                            -0.0,
+                            0.0,
+                            std::numeric_limits<double>::denorm_min(),
+                            std::numeric_limits<double>::min(),
+                            std::numeric_limits<double>::epsilon(),
+                            1.0,
+                            1.1,
+                            2.0,
+                            std::numeric_limits<int64_t>::max() + 1.0,
+                            std::numeric_limits<double>::max(),
+                            std::numeric_limits<double>::infinity()};
+
+  for (double double_value : cases) {
+    FieldValue model = FieldValue::FromDouble(double_value);
+    ExpectRoundTrip(model, ValueProto(double_value), FieldValue::Type::Double);
   }
 }
 
@@ -464,8 +470,82 @@ TEST_F(SerializerTest, EncodesTimestamps) {
   }
 }
 
+TEST_F(SerializerTest, EncodesBlobs) {
+  std::vector<ByteString> cases{
+      {},
+      {0, 1, 2, 3},
+      {0xff, 0x00, 0xff, 0x00},
+  };
+
+  for (const ByteString& blob_value : cases) {
+    FieldValue model = FieldValue::FromBlob(blob_value);
+    ExpectRoundTrip(model, ValueProto(blob_value), FieldValue::Type::Blob);
+  }
+}
+
+TEST_F(SerializerTest, EncodesNullBlobs) {
+  ByteString blob;
+  ASSERT_EQ(blob.get(), nullptr);  // Empty blobs are backed by a null buffer.
+  FieldValue model = FieldValue::FromBlob(blob);
+
+  // Avoid calling SerializerTest::EncodeFieldValue here because the Serializer
+  // could be allocating an empty byte array. These assertions show that the
+  // null blob really does materialize in the proto as null.
+  google_firestore_v1_Value proto = serializer.EncodeFieldValue(model);
+  ASSERT_EQ(proto.which_value_type, google_firestore_v1_Value_bytes_value_tag);
+  ASSERT_EQ(proto.bytes_value, nullptr);
+
+  // Encoding a Value message containing a blob_value of null bytes results
+  // in a non-empty message.
+  ByteStringWriter writer;
+  writer.WriteNanopbMessage(google_firestore_v1_Value_fields, &proto);
+  serializer.FreeNanopbMessage(google_firestore_v1_Value_fields, &proto);
+  ByteString bytes = writer.Release();
+  ASSERT_GT(bytes.size(), 0);
+
+  // When parsed by protobuf, this should be indistinguishable from having sent
+  // the empty string.
+  auto parsed_proto = ProtobufParse<v1::Value>(bytes);
+  std::string actual = parsed_proto.bytes_value();
+  EXPECT_EQ(actual, "");
+}
+
+TEST_F(SerializerTest, EncodesGeoPoint) {
+  std::vector<GeoPoint> cases{
+      {1.23, 4.56},
+  };
+
+  for (const GeoPoint& geo_value : cases) {
+    FieldValue model = FieldValue::FromGeoPoint(geo_value);
+    ExpectRoundTrip(model, ValueProto(geo_value), FieldValue::Type::GeoPoint);
+  }
+}
+
+TEST_F(SerializerTest, EncodesArray) {
+  std::vector<std::vector<FieldValue>> cases{
+      // Empty Array.
+      {},
+      // Typical Array.
+      {FieldValue::FromBoolean(true), FieldValue::FromString("foo")},
+      // Nested Array. NB: the protos explicitly state that directly nested
+      // arrays are not allowed, however arrays *can* contain a map which
+      // contains another array.
+      {FieldValue::FromString("foo"),
+       FieldValue::FromMap(
+           {{"nested array",
+             FieldValue::FromArray(
+                 {FieldValue::FromString("nested array value 1"),
+                  FieldValue::FromString("nested array value 2")})}}),
+       FieldValue::FromString("bar")}};
+
+  for (const std::vector<FieldValue>& array_value : cases) {
+    FieldValue model = FieldValue::FromArray(array_value);
+    ExpectRoundTrip(model, ValueProto(array_value), FieldValue::Type::Array);
+  }
+}
+
 TEST_F(SerializerTest, EncodesEmptyMap) {
-  FieldValue model = FieldValue::FromMap({});
+  FieldValue model = FieldValue::EmptyObject();
 
   v1::Value proto;
   proto.mutable_map_value();
@@ -476,13 +556,13 @@ TEST_F(SerializerTest, EncodesEmptyMap) {
 TEST_F(SerializerTest, EncodesNestedObjects) {
   FieldValue model = FieldValue::FromMap({
       {"b", FieldValue::True()},
-      // TODO(rsgowman): add doubles (once they're supported)
-      // {"d", FieldValue::DoubleValue(std::numeric_limits<double>::max())},
+      {"d", FieldValue::FromDouble(std::numeric_limits<double>::max())},
       {"i", FieldValue::FromInteger(1)},
       {"n", FieldValue::Null()},
       {"s", FieldValue::FromString("foo")},
-      // TODO(rsgowman): add arrays (once they're supported)
-      // {"a", [2, "bar", {"b", false}]},
+      {"a", FieldValue::FromArray(
+                {FieldValue::FromInteger(2), FieldValue::FromString("bar"),
+                 FieldValue::FromMap({{"b", FieldValue::False()}})})},
       {"o", FieldValue::FromMap({
                 {"d", FieldValue::FromInteger(100)},
                 {"nested", FieldValue::FromMap({
@@ -506,13 +586,24 @@ TEST_F(SerializerTest, EncodesNestedObjects) {
   (*middle_fields)["d"] = ValueProto(int64_t{100});
   (*middle_fields)["nested"] = inner_proto;
 
+  v1::Value array_proto;
+  *array_proto.mutable_array_value()->add_values() = ValueProto(int64_t{2});
+  *array_proto.mutable_array_value()->add_values() = ValueProto("bar");
+  v1::Value array_inner_proto;
+  google::protobuf::Map<std::string, v1::Value>* array_inner_fields =
+      array_inner_proto.mutable_map_value()->mutable_fields();
+  (*array_inner_fields)["b"] = ValueProto(false);
+  *array_proto.mutable_array_value()->add_values() = array_inner_proto;
+
   v1::Value proto;
   google::protobuf::Map<std::string, v1::Value>* fields =
       proto.mutable_map_value()->mutable_fields();
   (*fields)["b"] = ValueProto(true);
+  (*fields)["d"] = ValueProto(std::numeric_limits<double>::max());
   (*fields)["i"] = ValueProto(int64_t{1});
   (*fields)["n"] = ValueProto(nullptr);
   (*fields)["s"] = ValueProto("foo");
+  (*fields)["a"] = array_proto;
   (*fields)["o"] = middle_proto;
 
   ExpectRoundTrip(model, proto, FieldValue::Type::Object);
@@ -563,8 +654,8 @@ TEST_F(SerializerTest, EncodesFieldValuesWithRepeatedEntries) {
   bytes.resize(stream.bytes_written);
 
   // Decode the bytes into the model
-  Reader reader = Reader::Wrap(bytes.data(), bytes.size());
-  google_firestore_v1_Value nanopb_proto = google_firestore_v1_Value_init_zero;
+  Reader reader(bytes);
+  google_firestore_v1_Value nanopb_proto{};
   reader.ReadNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
   FieldValue actual_model = serializer.DecodeFieldValue(&reader, nanopb_proto);
   reader.FreeNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
@@ -577,24 +668,23 @@ TEST_F(SerializerTest, EncodesFieldValuesWithRepeatedEntries) {
 }
 
 TEST_F(SerializerTest, BadNullValue) {
-  std::vector<uint8_t> bytes =
-      EncodeFieldValue(&serializer, FieldValue::Null());
+  std::vector<uint8_t> bytes = MakeVector(EncodeFieldValue(FieldValue::Null()));
 
   // Alter the null value from 0 to 1.
   Mutate(&bytes[1], /*expected_initial_value=*/0, /*new_value=*/1);
 
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, BadBoolValueInterpretedAsTrue) {
   std::vector<uint8_t> bytes =
-      EncodeFieldValue(&serializer, FieldValue::FromBoolean(true));
+      MakeVector(EncodeFieldValue(FieldValue::FromBoolean(true)));
 
   // Alter the bool value from 1 to 2. (Value values are 0,1)
   Mutate(&bytes[1], /*expected_initial_value=*/1, /*new_value=*/2);
 
-  Reader reader = Reader::Wrap(bytes.data(), bytes.size());
+  Reader reader(bytes);
   google_firestore_v1_Value nanopb_proto{};
   reader.ReadNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
   FieldValue model = serializer.DecodeFieldValue(&reader, nanopb_proto);
@@ -606,9 +696,8 @@ TEST_F(SerializerTest, BadBoolValueInterpretedAsTrue) {
 
 TEST_F(SerializerTest, BadIntegerValue) {
   // Encode 'maxint'. This should result in 9 0xff bytes, followed by a 1.
-  std::vector<uint8_t> bytes = EncodeFieldValue(
-      &serializer,
-      FieldValue::FromInteger(std::numeric_limits<uint64_t>::max()));
+  auto max_int = FieldValue::FromInteger(std::numeric_limits<uint64_t>::max());
+  std::vector<uint8_t> bytes = MakeVector(EncodeFieldValue(max_int));
   ASSERT_EQ(11u, bytes.size());
   for (size_t i = 1; i < bytes.size() - 1; i++) {
     ASSERT_EQ(0xff, bytes[i]);
@@ -619,42 +708,42 @@ TEST_F(SerializerTest, BadIntegerValue) {
   bytes.resize(12);
   bytes[11] = 0x7f;
 
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, BadStringValue) {
   std::vector<uint8_t> bytes =
-      EncodeFieldValue(&serializer, FieldValue::FromString("a"));
+      MakeVector(EncodeFieldValue(FieldValue::FromString("a")));
 
   // Claim that the string length is 5 instead of 1. (The first two bytes are
   // used by the encoded tag.)
   Mutate(&bytes[2], /*expected_initial_value=*/1, /*new_value=*/5);
 
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, BadTimestampValue_TooLarge) {
-  std::vector<uint8_t> bytes = EncodeFieldValue(
-      &serializer, FieldValue::FromTimestamp(TimestampInternal::Max()));
+  auto max_ts = FieldValue::FromTimestamp(TimestampInternal::Max());
+  std::vector<uint8_t> bytes = MakeVector(EncodeFieldValue(max_ts));
 
   // Add some time, which should push us above the maximum allowed timestamp.
   Mutate(&bytes[4], 0x82, 0x83);
 
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, BadTimestampValue_TooSmall) {
-  std::vector<uint8_t> bytes = EncodeFieldValue(
-      &serializer, FieldValue::FromTimestamp(TimestampInternal::Min()));
+  auto min_ts = FieldValue::FromTimestamp(TimestampInternal::Min());
+  std::vector<uint8_t> bytes = MakeVector(EncodeFieldValue(min_ts));
 
   // Remove some time, which should push us below the minimum allowed timestamp.
   Mutate(&bytes[4], 0x92, 0x91);
 
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, BadFieldValueTagAndNoOtherTagPresent) {
@@ -663,8 +752,7 @@ TEST_F(SerializerTest, BadFieldValueTagAndNoOtherTagPresent) {
   // assume some sort of default type in this situation, we've decided to fail
   // the deserialization process in this case instead.
 
-  std::vector<uint8_t> bytes =
-      EncodeFieldValue(&serializer, FieldValue::Null());
+  std::vector<uint8_t> bytes = MakeVector(EncodeFieldValue(FieldValue::Null()));
 
   // The v1::Value value_type oneof currently has tags up to 18. For this test,
   // we'll pick a tag that's unlikely to be added in the near term but still
@@ -672,8 +760,8 @@ TEST_F(SerializerTest, BadFieldValueTagAndNoOtherTagPresent) {
   // field number 31 encoded as a varint.
   Mutate(&bytes[0], /*expected_initial_value=*/0x58, /*new_value=*/0xf8);
 
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, BadFieldValueTagWithOtherValidTagsPresent) {
@@ -712,8 +800,8 @@ TEST_F(SerializerTest, BadFieldValueTagWithOtherValidTagsPresent) {
   bytes.resize(stream.bytes_written);
 
   // Decode the bytes into the model
-  Reader reader = Reader::Wrap(bytes.data(), bytes.size());
-  google_firestore_v1_Value nanopb_proto = google_firestore_v1_Value_init_zero;
+  Reader reader(bytes);
+  google_firestore_v1_Value nanopb_proto{};
   reader.ReadNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
   FieldValue actual_model = serializer.DecodeFieldValue(&reader, nanopb_proto);
   reader.FreeNanopbMessage(google_firestore_v1_Value_fields, &nanopb_proto);
@@ -726,22 +814,21 @@ TEST_F(SerializerTest, BadFieldValueTagWithOtherValidTagsPresent) {
 }
 
 TEST_F(SerializerTest, IncompleteFieldValue) {
-  std::vector<uint8_t> bytes =
-      EncodeFieldValue(&serializer, FieldValue::Null());
+  std::vector<uint8_t> bytes = MakeVector(EncodeFieldValue(FieldValue::Null()));
   ASSERT_EQ(2u, bytes.size());
 
   // Remove the (null) payload
   ASSERT_EQ(0x00, bytes[1]);
   bytes.pop_back();
 
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, IncompleteTag) {
   std::vector<uint8_t> bytes;
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, FailOnInvalidInputBytes) {
@@ -749,8 +836,8 @@ TEST_F(SerializerTest, FailOnInvalidInputBytes) {
   // bytes correspond to a Map FieldValue with an empty value. It was
   // generated by our fuzz tests and used to trigger an assertion.
   std::vector<uint8_t> bytes = {0x32, 0x02, 0x0a, 0x00};
-  ExpectFailedStatusDuringFieldValueDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+  ExpectFailedStatusDuringFieldValueDecode(Status(Error::DataLoss, "ignored"),
+                                           bytes);
 }
 
 TEST_F(SerializerTest, EncodesKey) {
@@ -760,7 +847,7 @@ TEST_F(SerializerTest, EncodesKey) {
 }
 
 TEST_F(SerializerTest, DecodesKey) {
-  Reader reader = Reader::Wrap(nullptr, 0);
+  Reader reader(nullptr, 0);
   EXPECT_EQ(Key(""),
             serializer.DecodeKey(&reader, "projects/p/databases/d/documents"));
   EXPECT_EQ(
@@ -789,7 +876,7 @@ TEST_F(SerializerTest, BadKey) {
   };
 
   for (const std::string& bad_key : bad_cases) {
-    Reader reader = Reader::Wrap(nullptr, 0);
+    Reader reader(nullptr, 0);
     serializer.DecodeKey(&reader, bad_key);
     EXPECT_NOT_OK(reader.status());
   }
@@ -797,7 +884,7 @@ TEST_F(SerializerTest, BadKey) {
 
 TEST_F(SerializerTest, EncodesEmptyDocument) {
   DocumentKey key = DocumentKey::FromPathString("path/to/the/doc");
-  FieldValue empty_value = FieldValue::FromMap({});
+  ObjectValue empty_value = ObjectValue::Empty();
   SnapshotVersion update_time = SnapshotVersion{{1234, 5678}};
 
   v1::BatchGetDocumentsResponse proto;
@@ -817,7 +904,7 @@ TEST_F(SerializerTest, EncodesEmptyDocument) {
 
 TEST_F(SerializerTest, EncodesNonEmptyDocument) {
   DocumentKey key = DocumentKey::FromPathString("path/to/the/doc");
-  FieldValue fields = FieldValue::FromMap({
+  ObjectValue fields = ObjectValue::FromMap({
       {"foo", FieldValue::FromString("bar")},
       {"two", FieldValue::FromInteger(2)},
       {"nested", FieldValue::FromMap({
@@ -872,13 +959,9 @@ TEST_F(SerializerTest, DecodesNoDocument) {
 TEST_F(SerializerTest, DecodeMaybeDocWithoutFoundOrMissingSetShouldFail) {
   v1::BatchGetDocumentsResponse proto;
 
-  std::vector<uint8_t> bytes(proto.ByteSizeLong());
-  bool status =
-      proto.SerializeToArray(bytes.data(), static_cast<int>(bytes.size()));
-  EXPECT_TRUE(status);
-
+  ByteString bytes = ProtobufSerialize(proto);
   ExpectFailedStatusDuringMaybeDocumentDecode(
-      Status(FirestoreErrorCode::DataLoss, "ignored"), bytes);
+      Status(Error::DataLoss, "ignored"), bytes);
 }
 
 // TODO(rsgowman): Test [en|de]coding multiple protos into the same output

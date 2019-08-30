@@ -1,4 +1,31 @@
-# Unreleased
+# v6.2.0 -- M53
+- [added] Added AppKit dependency on macOS and UIKit dependency on iOS and tvOS. (#3459)
+- [added] Added support for Firebase Segmentation. (#3430)
+- [changed] Moved core diagnostics log to app launch when core data collection is enabled. (#3437)
+- [changed] Open-sourced the Firebase Core Diagnostics SDK. (#3129)
+
+# 2019-07-18 -- v6.1.0 -- M52
+- [added] `FIROptions.appGroupID` property added to configure the App Group identifier required to share
+  data between the application and the application extensions. (#3293)
+
+# 2019-05-21 -- v6.0.1 -- M48
+- [changed] Allowed `FirebaseApp` name to accept any alpha-numeric character instead of only ASCII. (#2609)
+
+# 2019-05-07 -- v6.0.0 -- M47
+- [changed] Added support for CocoaPods 1.7.x `:generate_multiple_pod_projects` feature. (#2751)
+- [removed] Remove FIRAnalyticsConfiguration from Public header. Use from FirebaseAnalytics. (#2728)
+- [changed] Remove runtime warning for missing analytics in favor of one at build time. (#2734)
+
+# 2019-04-02 -- v5.4.1 -- M46
+- [changed] Avoid using NSRegularExpression in FIRApp.
+- [changed] Improve error meessage for invalid app names. (#2614)
+- [changed] FIRApp thread safety fixes. (#2639)
+
+# 2019-03-19 -- v5.4.0 -- M45
+- [changed] Allow Bundle IDs that have a valid prefix to enable richer extension support. (#2515)
+- [changed] Deprecated `FIRAnalyticsConfiguration` API in favor of new methods on the Analytics SDK.
+  Please call the new APIs directly: Enable/disable Analytics with `Analytics.setAnalyticsCollectionEnabled(_)`
+  and modify the session timeout interval with `Analytics.setSessionTimeoutInterval(_)`.
 
 # 2019-01-22 -- v5.2.0 -- M41
 - [changed] Added a registerInternalLibrary API. Now other Firebase libraries register with FirebaseCore

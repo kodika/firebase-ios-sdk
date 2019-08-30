@@ -16,43 +16,40 @@
 
 #include "Firestore/core/src/firebase/firestore/remote/remote_store.h"
 
+#include <string>
 #include <utility>
 
 #import "Firestore/Source/Local/FSTLocalStore.h"
-#import "Firestore/Source/Local/FSTQueryData.h"
-#import "Firestore/Source/Model/FSTMutationBatch.h"
 
 #include "Firestore/core/src/firebase/firestore/core/transaction.h"
+#include "Firestore/core/src/firebase/firestore/local/query_data.h"
 #include "Firestore/core/src/firebase/firestore/model/mutation_batch.h"
+#include "Firestore/core/src/firebase/firestore/nanopb/nanopb_util.h"
 #include "Firestore/core/src/firebase/firestore/util/error_apple.h"
 #include "Firestore/core/src/firebase/firestore/util/hard_assert.h"
 #include "Firestore/core/src/firebase/firestore/util/log.h"
+#include "Firestore/core/src/firebase/firestore/util/to_string.h"
 #include "absl/memory/memory.h"
-
-using firebase::firestore::core::Transaction;
-using firebase::firestore::model::BatchId;
-using firebase::firestore::model::DocumentKeySet;
-using firebase::firestore::model::OnlineState;
-using firebase::firestore::model::SnapshotVersion;
-using firebase::firestore::model::TargetId;
-using firebase::firestore::model::kBatchIdUnknown;
-using firebase::firestore::remote::Datastore;
-using firebase::firestore::remote::WatchStream;
-using firebase::firestore::remote::DocumentWatchChange;
-using firebase::firestore::remote::ExistenceFilterWatchChange;
-using firebase::firestore::remote::OnlineStateTracker;
-using firebase::firestore::remote::RemoteEvent;
-using firebase::firestore::remote::TargetChange;
-using firebase::firestore::remote::WatchChange;
-using firebase::firestore::remote::WatchChangeAggregator;
-using firebase::firestore::remote::WatchTargetChange;
-using firebase::firestore::remote::WatchTargetChangeState;
-using firebase::firestore::util::AsyncQueue;
-using firebase::firestore::util::Status;
 
 namespace firebase {
 namespace firestore {
 namespace remote {
+
+using core::Transaction;
+using local::QueryData;
+using local::QueryPurpose;
+using model::BatchId;
+using model::DocumentKeySet;
+using model::MutationBatch;
+using model::MutationBatchResult;
+using model::MutationResult;
+using model::OnlineState;
+using model::SnapshotVersion;
+using model::TargetId;
+using model::kBatchIdUnknown;
+using nanopb::ByteString;
+using util::AsyncQueue;
+using util::Status;
 
 /**
  * The maximum number of pending writes to allow.
@@ -63,7 +60,7 @@ constexpr int kMaxPendingWrites = 10;
 RemoteStore::RemoteStore(
     FSTLocalStore* local_store,
     std::shared_ptr<Datastore> datastore,
-    AsyncQueue* worker_queue,
+    const std::shared_ptr<AsyncQueue>& worker_queue,
     std::function<void(model::OnlineState)> online_state_handler)
     : local_store_{local_store},
       datastore_{std::move(datastore)},
@@ -134,8 +131,8 @@ void RemoteStore::Shutdown() {
 
 // Watch Stream
 
-void RemoteStore::Listen(FSTQueryData* query_data) {
-  TargetId targetKey = query_data.targetID;
+void RemoteStore::Listen(const QueryData& query_data) {
+  TargetId targetKey = query_data.target_id();
   HARD_ASSERT(listen_targets_.find(targetKey) == listen_targets_.end(),
               "Listen called with duplicate target id: %s", targetKey);
 
@@ -171,10 +168,10 @@ void RemoteStore::StopListening(TargetId target_id) {
   }
 }
 
-void RemoteStore::SendWatchRequest(FSTQueryData* query_data) {
+void RemoteStore::SendWatchRequest(const QueryData& query_data) {
   // We need to increment the the expected number of pending responses we're due
   // from watch so we wait for the ack to process any messages from this target.
-  watch_change_aggregator_->RecordPendingTargetRequest(query_data.targetID);
+  watch_change_aggregator_->RecordPendingTargetRequest(query_data.target_id());
   watch_stream_->WatchQuery(query_data);
 }
 
@@ -280,20 +277,20 @@ void RemoteStore::RaiseWatchSnapshot(const SnapshotVersion& snapshot_version) {
   // view of these when applying the completed `RemoteEvent`.
   for (const auto& entry : remote_event.target_changes()) {
     const TargetChange& target_change = entry.second;
-    NSData* resumeToken = target_change.resume_token();
+    const ByteString& resumeToken = target_change.resume_token();
 
-    if (resumeToken.length > 0) {
+    if (!resumeToken.empty()) {
       TargetId target_id = entry.first;
       auto found = listen_targets_.find(target_id);
-      FSTQueryData* query_data =
-          found != listen_targets_.end() ? found->second : nil;
+      absl::optional<QueryData> query_data;
+      if (found != listen_targets_.end()) {
+        query_data = found->second;
+      }
 
       // A watched target might have been removed already.
       if (query_data) {
-        listen_targets_[target_id] = [query_data
-            queryDataByReplacingSnapshotVersion:snapshot_version
-                                    resumeToken:resumeToken
-                                 sequenceNumber:query_data.sequenceNumber];
+        listen_targets_[target_id] = query_data->Copy(
+            snapshot_version, resumeToken, query_data->sequence_number());
       }
     }
   }
@@ -306,14 +303,12 @@ void RemoteStore::RaiseWatchSnapshot(const SnapshotVersion& snapshot_version) {
       // A watched target might have been removed already.
       continue;
     }
-    FSTQueryData* query_data = found->second;
+    QueryData query_data = found->second;
 
     // Clear the resume token for the query, since we're in a known mismatch
     // state.
-    query_data = [[FSTQueryData alloc] initWithQuery:query_data.query
-                                            targetID:target_id
-                                listenSequenceNumber:query_data.sequenceNumber
-                                             purpose:query_data.purpose];
+    query_data = QueryData(query_data.query(), target_id,
+                           query_data.sequence_number(), query_data.purpose());
     listen_targets_[target_id] = query_data;
 
     // Cause a hard reset by unwatching and rewatching immediately, but
@@ -324,11 +319,9 @@ void RemoteStore::RaiseWatchSnapshot(const SnapshotVersion& snapshot_version) {
     // mismatch, but don't actually retain that in listen_targets_. This ensures
     // that we flag the first re-listen this way without impacting future
     // listens of this target (that might happen e.g. on reconnect).
-    FSTQueryData* request_query_data = [[FSTQueryData alloc]
-               initWithQuery:query_data.query
-                    targetID:target_id
-        listenSequenceNumber:query_data.sequenceNumber
-                     purpose:FSTQueryPurposeExistenceFilterMismatch];
+    QueryData request_query_data(query_data.query(), target_id,
+                                 query_data.sequence_number(),
+                                 QueryPurpose::ExistenceFilterMismatch);
     SendWatchRequest(request_query_data);
   }
 
@@ -356,9 +349,9 @@ void RemoteStore::ProcessTargetError(const WatchTargetChange& change) {
 void RemoteStore::FillWritePipeline() {
   BatchId last_batch_id_retrieved = write_pipeline_.empty()
                                         ? kBatchIdUnknown
-                                        : write_pipeline_.back().batchID;
+                                        : write_pipeline_.back().batch_id();
   while (CanAddToWritePipeline()) {
-    FSTMutationBatch* batch =
+    absl::optional<MutationBatch> batch =
         [local_store_ nextMutationBatchAfterBatchID:last_batch_id_retrieved];
     if (!batch) {
       if (write_pipeline_.empty()) {
@@ -366,8 +359,8 @@ void RemoteStore::FillWritePipeline() {
       }
       break;
     }
-    AddToWritePipeline(batch);
-    last_batch_id_retrieved = batch.batchID;
+    AddToWritePipeline(*batch);
+    last_batch_id_retrieved = batch->batch_id();
   }
 
   if (ShouldStartWriteStream()) {
@@ -379,14 +372,14 @@ bool RemoteStore::CanAddToWritePipeline() const {
   return CanUseNetwork() && write_pipeline_.size() < kMaxPendingWrites;
 }
 
-void RemoteStore::AddToWritePipeline(FSTMutationBatch* batch) {
+void RemoteStore::AddToWritePipeline(const MutationBatch& batch) {
   HARD_ASSERT(CanAddToWritePipeline(),
               "AddToWritePipeline called when pipeline is full");
 
   write_pipeline_.push_back(batch);
 
   if (write_stream_->IsOpen() && write_stream_->handshake_complete()) {
-    write_stream_->WriteMutations(batch.mutations);
+    write_stream_->WriteMutations(batch.mutations());
   }
 }
 
@@ -410,26 +403,24 @@ void RemoteStore::OnWriteStreamHandshakeComplete() {
   [local_store_ setLastStreamToken:write_stream_->GetLastStreamToken()];
 
   // Send the write pipeline now that the stream is established.
-  for (FSTMutationBatch* write : write_pipeline_) {
-    write_stream_->WriteMutations(write.mutations);
+  for (const MutationBatch& write : write_pipeline_) {
+    write_stream_->WriteMutations(write.mutations());
   }
 }
 
 void RemoteStore::OnWriteStreamMutationResult(
     SnapshotVersion commit_version,
-    std::vector<FSTMutationResult*> mutation_results) {
+    std::vector<MutationResult> mutation_results) {
   // This is a response to a write containing mutations and should be correlated
   // to the first write in our write pipeline.
   HARD_ASSERT(!write_pipeline_.empty(), "Got result for empty write pipeline");
 
-  FSTMutationBatch* batch = write_pipeline_.front();
+  MutationBatch batch = write_pipeline_.front();
   write_pipeline_.erase(write_pipeline_.begin());
 
-  FSTMutationBatchResult* batchResult = [FSTMutationBatchResult
-      resultWithBatch:batch
-        commitVersion:commit_version
-      mutationResults:std::move(mutation_results)
-          streamToken:write_stream_->GetLastStreamToken()];
+  MutationBatchResult batchResult(std::move(batch), commit_version,
+                                  std::move(mutation_results),
+                                  write_stream_->GetLastStreamToken());
   [sync_engine_ applySuccessfulWriteWithResult:batchResult];
 
   // It's possible that with the completion of this mutation another slot has
@@ -475,14 +466,13 @@ void RemoteStore::HandleHandshakeError(const Status& status) {
   // no longer valid. Note that the handshake does not count as a write: see
   // comments on `Datastore::IsPermanentWriteError` for details.
   if (Datastore::IsPermanentError(status)) {
-    NSString* token =
-        [write_stream_->GetLastStreamToken() base64EncodedStringWithOptions:0];
+    std::string token = util::ToString(write_stream_->GetLastStreamToken());
     LOG_DEBUG("RemoteStore %s error before completed handshake; resetting "
               "stream token %s: "
               "error code: '%s', details: '%s'",
               this, token, status.code(), status.error_message());
-    write_stream_->SetLastStreamToken(nil);
-    [local_store_ setLastStreamToken:nil];
+    write_stream_->SetLastStreamToken({});
+    [local_store_ setLastStreamToken:{}];
   } else {
     // Some other error, don't reset stream token. Our stream logic will just
     // retry with exponential backoff.
@@ -500,14 +490,14 @@ void RemoteStore::HandleWriteError(const Status& status) {
 
   // If this was a permanent error, the request itself was the problem so it's
   // not going to succeed if we resend it.
-  FSTMutationBatch* batch = write_pipeline_.front();
+  MutationBatch batch = write_pipeline_.front();
   write_pipeline_.erase(write_pipeline_.begin());
 
   // In this case it's also unlikely that the server itself is melting
   // down--this was just a bad request so inhibit backoff on the next restart.
   write_stream_->InhibitBackoff();
 
-  [sync_engine_ rejectFailedWriteWithBatchID:batch.batchID
+  [sync_engine_ rejectFailedWriteWithBatchID:batch.batch_id()
                                        error:util::MakeNSError(status)];
 
   // It's possible that with the completion of this mutation another slot has
@@ -529,9 +519,11 @@ DocumentKeySet RemoteStore::GetRemoteKeysForTarget(TargetId target_id) const {
   return [sync_engine_ remoteKeysForTarget:target_id];
 }
 
-FSTQueryData* RemoteStore::GetQueryDataForTarget(TargetId target_id) const {
+absl::optional<QueryData> RemoteStore::GetQueryDataForTarget(
+    TargetId target_id) const {
   auto found = listen_targets_.find(target_id);
-  return found != listen_targets_.end() ? found->second : nil;
+  return found != listen_targets_.end() ? found->second
+                                        : absl::optional<QueryData>{};
 }
 
 void RemoteStore::HandleCredentialChange() {

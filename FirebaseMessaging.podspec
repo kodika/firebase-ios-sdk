@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'FirebaseMessaging'
-  s.version          = '3.3.1'
+  s.version          = '4.1.3'
   s.summary          = 'Firebase Messaging for iOS'
 
   s.description      = <<-DESC
@@ -20,6 +20,8 @@ device, and it is completely free.
   }
   s.social_media_url = 'https://twitter.com/Firebase'
   s.ios.deployment_target = '8.0'
+  s.osx.deployment_target = '10.11'
+  s.tvos.deployment_target = '10.0'
 
   s.cocoapods_version = '>= 1.4.0'
   s.static_framework = true
@@ -34,13 +36,27 @@ device, and it is completely free.
     'GCC_C_LANGUAGE_STANDARD' => 'c99',
     'GCC_PREPROCESSOR_DEFINITIONS' =>
       'GPB_USE_PROTOBUF_FRAMEWORK_IMPORTS=1 ' +
-      'FIRMessaging_LIB_VERSION=' + String(s.version)
-  }
+      'FIRMessaging_LIB_VERSION=' + String(s.version),
+    # Unit tests do library imports using repo-root relative paths.
+    'HEADER_SEARCH_PATHS' => '"${PODS_TARGET_SRCROOT}"',
+ }
   s.framework = 'SystemConfiguration'
-  s.dependency 'FirebaseAnalyticsInterop', '~> 1.1'
-  s.dependency 'FirebaseCore', '~> 5.2'
-  s.dependency 'FirebaseInstanceID', '~> 3.6'
-  s.dependency 'GoogleUtilities/Reachability', '~> 5.2'
-  s.dependency 'GoogleUtilities/Environment', '~> 5.2'
+  s.weak_framework = 'UserNotifications'
+  s.dependency 'FirebaseAnalyticsInterop', '~> 1.3'
+  s.dependency 'FirebaseCore', '~> 6.2'
+  s.dependency 'FirebaseInstanceID', '~> 4.1'
+  s.dependency 'GoogleUtilities/AppDelegateSwizzler', '~> 6.2'
+  s.dependency 'GoogleUtilities/Reachability', '~> 6.2'
+  s.dependency 'GoogleUtilities/Environment', '~> 6.2'
+  s.dependency 'GoogleUtilities/UserDefaults', '~> 6.2'
   s.dependency 'Protobuf', '~> 3.1'
+
+  s.test_spec 'unit' do |unit_tests|
+    unit_tests.source_files = 'Example/Messaging/Tests/*.{m,h,swift}'
+    unit_tests.requires_app_host = true
+    unit_tests.pod_target_xcconfig = {
+     'CLANG_ENABLE_OBJC_WEAK' => 'YES'
+    }
+    unit_tests.dependency 'OCMock'
+  end
 end

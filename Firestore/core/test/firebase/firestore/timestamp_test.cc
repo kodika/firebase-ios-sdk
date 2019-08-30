@@ -16,11 +16,18 @@
 
 #include "Firestore/core/include/firebase/firestore/timestamp.h"
 
+#include <cmath>
 #include <limits>
 #include <utility>
 #include <vector>
 
+#include "Firestore/core/src/firebase/firestore/util/warnings.h"
 #include "gtest/gtest.h"
+
+SUPPRESS_COMMA_WARNINGS_BEGIN()
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
+SUPPRESS_END()
 
 namespace firebase {
 
@@ -32,6 +39,7 @@ using Ms = std::chrono::milliseconds;
 
 const auto kUpperBound = 253402300800L - 1;
 const auto kLowerBound = -62135596800L;
+constexpr int32_t kNanosPerSecond = 1000 * 1000 * 1000;
 
 // For near-bounds tests that use <chrono>, it's important to only run them if
 // system_clock::duration can represent values this large (e.g., on Linux, it's
@@ -75,6 +83,22 @@ TEST(Timestamp, Constructors) {
   EXPECT_EQ(now.nanoseconds(), copy_now.nanoseconds());
   const Timestamp move_now = std::move(copy_now);
   EXPECT_EQ(now, move_now);
+}
+
+TEST(Timestamp, Now) {
+  Timestamp now = Timestamp::Now();
+  timespec spec = absl::ToTimespec(absl::Now());
+
+  int64_t seconds_diff = spec.tv_sec - now.seconds();
+  int64_t nanos_diff = spec.tv_nsec - now.nanoseconds();
+
+  nanos_diff = std::abs(seconds_diff * kNanosPerSecond + nanos_diff);
+
+  // Assert that time produced by Timestamp and Abseil are within 10ms of each
+  // other. In practice these are only a few microseconds apart, but the
+  // larger goal here is to verify that the seconds value is being properly
+  // adjusted to be relative to the UNIX epoch.
+  ASSERT_LT(nanos_diff, 10E6);
 }
 
 TEST(Timestamp, Bounds) {

@@ -17,9 +17,9 @@ cc_library(
   SOURCES
     app_testing.h
     app_testing.mm
+    xcgmock.h
   DEPENDS
     FirebaseCore
-    GoogleUtilities
     absl_strings
   EXCLUDE_FROM_ALL
 )
@@ -31,9 +31,16 @@ endif()
 cc_library(
   firebase_firestore_testutil
   SOURCES
+    equals_tester.h
     testutil.cc
     testutil.h
+    time_testing.cc
+    time_testing.h
   DEPENDS
+    # TODO(b/111328563) Force nanopb first to work around ODR violations
+    firebase_firestore_nanopb
+
     ${TESTUTIL_DEPENDS}
+    firebase_firestore_core
     firebase_firestore_model
 )

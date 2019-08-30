@@ -25,10 +25,11 @@
 #import "Firestore/Example/Tests/Util/FSTIntegrationTestCase.h"
 
 #include "Firestore/core/src/firebase/firestore/util/autoid.h"
+#include "Firestore/core/src/firebase/firestore/util/sanitizers.h"
 #include "Firestore/core/src/firebase/firestore/util/string_apple.h"
 
+namespace util = firebase::firestore::util;
 using firebase::firestore::util::CreateAutoId;
-using firebase::firestore::util::WrapNSString;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -333,7 +334,7 @@ NS_ASSUME_NONNULL_BEGIN
   NSString *kb = [@"" stringByPaddingToLength:1000 withString:@"a" startingAtIndex:0];
   NSMutableDictionary<NSString *, id> *values = [NSMutableDictionary dictionary];
   for (int i = 0; i < 1000; i++) {
-    values[WrapNSString(CreateAutoId())] = kb;
+    values[util::MakeNSString(CreateAutoId())] = kb;
   }
 
   FIRDocumentReference *doc = [self documentRef];
@@ -400,9 +401,15 @@ int64_t GetCurrentMemoryUsedInMb() {
     const int64_t memoryUsedAfterCommitMb = GetCurrentMemoryUsedInMb();
     XCTAssertNotEqual(memoryUsedAfterCommitMb, -1);
     const int64_t memoryDeltaMb = memoryUsedAfterCommitMb - memoryUsedBeforeCommitMb;
+
+#if !defined(THREAD_SANITIZER) && !defined(ADDRESS_SANITIZER)
     // This by its nature cannot be a precise value. Runs on simulator seem to give an increase of
     // 10MB in debug mode pretty consistently. A regression would be on the scale of 500Mb.
+    //
+    // This check is disabled under the thread sanitizer because it introduces an overhead of
+    // 5x-10x.
     XCTAssertLessThan(memoryDeltaMb, 20);
+#endif
 
     [expectation fulfill];
   }];

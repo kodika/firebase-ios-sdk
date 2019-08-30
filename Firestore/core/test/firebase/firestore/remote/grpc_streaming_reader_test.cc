@@ -37,7 +37,7 @@ using util::CompletionEndState;
 using util::CompletionResult;
 using util::CreateNoOpConnectivityMonitor;
 using util::ExecutorStd;
-using util::GetFirestoreErrorCodeName;
+using util::GetFirestoreErrorName;
 using util::GetGrpcErrorCodeName;
 using util::GrpcStreamTester;
 using util::MakeByteBuffer;
@@ -49,9 +49,10 @@ using Type = GrpcCompletion::Type;
 class GrpcStreamingReaderTest : public testing::Test {
  public:
   GrpcStreamingReaderTest()
-      : worker_queue{absl::make_unique<ExecutorStd>()},
+      : worker_queue{std::make_shared<AsyncQueue>(
+            absl::make_unique<ExecutorStd>())},
         connectivity_monitor{CreateNoOpConnectivityMonitor()},
-        tester{&worker_queue, connectivity_monitor.get()},
+        tester{worker_queue, connectivity_monitor.get()},
         reader{tester.CreateStreamingReader()} {
   }
 
@@ -59,7 +60,7 @@ class GrpcStreamingReaderTest : public testing::Test {
     if (reader) {
       // It's okay to call `FinishImmediately` more than once.
       KeepPollingGrpcQueue();
-      worker_queue.EnqueueBlocking([&] { reader->FinishImmediately(); });
+      worker_queue->EnqueueBlocking([&] { reader->FinishImmediately(); });
     }
     tester.Shutdown();
   }
@@ -80,7 +81,7 @@ class GrpcStreamingReaderTest : public testing::Test {
   }
 
   void StartReader() {
-    worker_queue.EnqueueBlocking([&] {
+    worker_queue->EnqueueBlocking([&] {
       reader->Start(
           [this](const StatusOr<std::vector<grpc::ByteBuffer>>& result) {
             status = result.status();
@@ -91,7 +92,7 @@ class GrpcStreamingReaderTest : public testing::Test {
     });
   }
 
-  AsyncQueue worker_queue;
+  std::shared_ptr<AsyncQueue> worker_queue;
   std::unique_ptr<ConnectivityMonitor> connectivity_monitor;
   GrpcStreamTester tester;
 
@@ -104,13 +105,13 @@ class GrpcStreamingReaderTest : public testing::Test {
 // API usage
 
 TEST_F(GrpcStreamingReaderTest, FinishImmediatelyIsIdempotent) {
-  worker_queue.EnqueueBlocking(
+  worker_queue->EnqueueBlocking(
       [&] { EXPECT_NO_THROW(reader->FinishImmediately()); });
 
   StartReader();
 
   KeepPollingGrpcQueue();
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     EXPECT_NO_THROW(reader->FinishImmediately());
     EXPECT_NO_THROW(reader->FinishAndNotify(Status::OK()));
     EXPECT_NO_THROW(reader->FinishImmediately());
@@ -128,7 +129,7 @@ TEST_F(GrpcStreamingReaderTest, CanGetResponseHeadersAfterFinishing) {
   StartReader();
 
   KeepPollingGrpcQueue();
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     reader->FinishImmediately();
     EXPECT_NO_THROW(reader->GetResponseHeaders());
   });
@@ -136,13 +137,9 @@ TEST_F(GrpcStreamingReaderTest, CanGetResponseHeadersAfterFinishing) {
 
 // Method prerequisites -- incorrect usage
 
-// Death tests should contain the word "DeathTest" in their name -- see
-// https://github.com/google/googletest/blob/master/googletest/docs/advanced.md#death-test-naming
-using GrpcStreamingReaderDeathTest = GrpcStreamingReaderTest;
-
 TEST_F(GrpcStreamingReaderTest, CannotFinishAndNotifyBeforeStarting) {
   // No callback has been assigned.
-  worker_queue.EnqueueBlocking(
+  worker_queue->EnqueueBlocking(
       [&] { EXPECT_ANY_THROW(reader->FinishAndNotify(Status::OK())); });
 }
 
@@ -195,7 +192,7 @@ TEST_F(GrpcStreamingReaderTest, FinishWhileReading) {
   EXPECT_FALSE(status.has_value());
 
   KeepPollingGrpcQueue();
-  worker_queue.EnqueueBlocking([&] { reader->FinishImmediately(); });
+  worker_queue->EnqueueBlocking([&] { reader->FinishImmediately(); });
 
   EXPECT_FALSE(status.has_value());
   EXPECT_TRUE(responses.empty());
@@ -232,10 +229,10 @@ TEST_F(GrpcStreamingReaderTest, ErrorOnWrite) {
     }
   });
   future.wait();
-  worker_queue.EnqueueBlocking([] {});
+  worker_queue->EnqueueBlocking([] {});
 
   ASSERT_TRUE(status.has_value());
-  EXPECT_EQ(status.value().code(), FirestoreErrorCode::ResourceExhausted);
+  EXPECT_EQ(status.value().code(), Error::ResourceExhausted);
   EXPECT_TRUE(responses.empty());
 }
 
@@ -250,7 +247,7 @@ TEST_F(GrpcStreamingReaderTest, ErrorOnFirstRead) {
   ForceFinish(
       {{Type::Finish, grpc::Status{grpc::StatusCode::UNAVAILABLE, ""}}});
   ASSERT_TRUE(status.has_value());
-  EXPECT_EQ(status.value().code(), FirestoreErrorCode::Unavailable);
+  EXPECT_EQ(status.value().code(), Error::Unavailable);
   EXPECT_TRUE(responses.empty());
 }
 
@@ -265,14 +262,14 @@ TEST_F(GrpcStreamingReaderTest, ErrorOnSecondRead) {
 
   ForceFinish({{Type::Finish, grpc::Status{grpc::StatusCode::DATA_LOSS, ""}}});
   ASSERT_TRUE(status.has_value());
-  EXPECT_EQ(status.value().code(), FirestoreErrorCode::DataLoss);
+  EXPECT_EQ(status.value().code(), Error::DataLoss);
   EXPECT_TRUE(responses.empty());
 }
 
 // Callback destroys reader
 
 TEST_F(GrpcStreamingReaderTest, CallbackCanDestroyReaderOnSuccess) {
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     reader->Start([this](const StatusOr<std::vector<grpc::ByteBuffer>>&) {
       reader.reset();
     });
@@ -290,7 +287,7 @@ TEST_F(GrpcStreamingReaderTest, CallbackCanDestroyReaderOnSuccess) {
 }
 
 TEST_F(GrpcStreamingReaderTest, CallbackCanDestroyReaderOnError) {
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     reader->Start([this](const StatusOr<std::vector<grpc::ByteBuffer>>&) {
       reader.reset();
     });

@@ -20,7 +20,6 @@
 
 #import "Firestore/Example/Tests/Util/FSTIntegrationTestCase.h"
 #import "Firestore/Source/API/FIRFirestore+Internal.h"
-#import "Firestore/Source/Core/FSTFirestoreClient.h"
 
 @interface FIRFirestoreSourceTests : FSTIntegrationTestCase
 @end
@@ -67,6 +66,30 @@
                           @[ @(FIRDocumentChangeTypeAdded), @"doc2", @{@"key2" : @"value2"} ],
                           @[ @(FIRDocumentChangeTypeAdded), @"doc3", @{@"key3" : @"value3"} ]
                         ]));
+}
+
+- (void)testGetDocumentError {
+  FIRDocumentReference *doc = [self.db documentWithPath:@"foo/__invalid__"];
+
+  XCTestExpectation *completed = [self expectationWithDescription:@"get completed"];
+  [doc getDocumentWithCompletion:^(FIRDocumentSnapshot *snapshot, NSError *error) {
+    XCTAssertNotNil(error);
+    [completed fulfill];
+  }];
+
+  [self awaitExpectations];
+}
+
+- (void)testGetCollectionError {
+  FIRCollectionReference *col = [self.db collectionWithPath:@"__invalid__"];
+
+  XCTestExpectation *completed = [self expectationWithDescription:@"get completed"];
+  [col getDocumentsWithCompletion:^(FIRQuerySnapshot *snapshot, NSError *error) {
+    XCTAssertNotNil(error);
+    [completed fulfill];
+  }];
+
+  [self awaitExpectations];
 }
 
 - (void)testGetDocumentWhileOfflineWithDefaultSource {

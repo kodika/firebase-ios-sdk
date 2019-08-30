@@ -150,18 +150,19 @@ cc_test(
     autoid_test.cc
     bits_test.cc
     comparison_test.cc
+    delayed_constructor_test.cc
     hashing_test.cc
     iterator_adaptors_test.cc
     ordered_code_test.cc
+    status_apple_test.mm
     status_test.cc
-    status_test_util.h
+    status_testing.h
     statusor_test.cc
     strerror_test.cc
     string_format_apple_test.mm
     string_format_test.cc
     string_util_test.cc
     string_win_test.cc
-    type_traits_apple_test.mm
   DEPENDS
     absl_base
     absl_strings
@@ -189,3 +190,27 @@ cc_library(
     firebase_firestore_util
     grpc++
 )
+
+# Benchmarks
+
+cc_binary(
+  firebase_firestore_util_ordered_code_benchmark
+  SOURCES
+    ordered_code_benchmark.cc
+  DEPENDS
+    benchmark
+    benchmark_main
+    firebase_firestore_util
+)
+
+if(APPLE)
+  cc_binary(
+    firebase_firestore_util_string_apple_benchmark
+    SOURCES
+      string_apple_benchmark.mm
+    DEPENDS
+      benchmark
+      benchmark_main
+      firebase_firestore_util_base_apple
+  )
+endif()

@@ -58,7 +58,15 @@ TEST_F(StringAppleTest, MakeStringFromCFStringRef) {
 
 TEST_F(StringAppleTest, MakeStringFromNSString) {
   for (const std::string& string_value : StringTestCases()) {
-    NSString* ns_string = WrapNSString(string_value);
+    NSString* ns_string = MakeNSString(string_value);
+    std::string actual = MakeString(ns_string);
+    EXPECT_EQ(string_value, actual);
+  }
+}
+
+TEST_F(StringAppleTest, MakeStringFromNSStringNoCopy) {
+  for (const std::string& string_value : StringTestCases()) {
+    NSString* ns_string = MakeNSStringNoCopy(string_value);
     std::string actual = MakeString(ns_string);
     EXPECT_EQ(string_value, actual);
   }

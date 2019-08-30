@@ -48,7 +48,7 @@ NSString *kGoogleTestAccountRefreshToken = KGOOGLE_TEST_ACCOUNT_REFRESH_TOKEN;
   XCTestExpectation *expectation =
       [self expectationWithDescription:@"Signing in with Google finished."];
   [auth signInWithCredential:credential
-                  completion:^(FIRUser *user, NSError *error) {
+                  completion:^(FIRAuthDataResult *result, NSError *error) {
                     if (error) {
                       NSLog(@"Signing in with Google had error: %@", error);
                     }
@@ -64,9 +64,6 @@ NSString *kGoogleTestAccountRefreshToken = KGOOGLE_TEST_ACCOUNT_REFRESH_TOKEN;
                                  }
                                }];
   XCTAssertEqualObjects(auth.currentUser.displayName, kGoogleTestAccountName);
-
-  // Clean up the created Firebase/Facebook user for future runs.
-  [self deleteCurrentUser];
 }
 
 /** Sends http request to Google OAuth2 token server to use refresh token to exchange for Google

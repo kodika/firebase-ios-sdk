@@ -1,16 +1,17 @@
 # Uncomment the next line to define a global platform for your project
 # platform :ios, '9.0'
 
+source 'https://cdn.cocoapods.org/'
+
 target 'SymbolCollisionTest' do
   # Uncomment the next line if you're using Swift or would like to use dynamic frameworks
   # use_frameworks!
 
   # Firebase Pods
-    pod 'Firebase', '5.17.0'
+    pod 'Firebase', '6.7.0'
     pod 'FirebaseAnalytics'
     pod 'FirebaseAuth'
     pod 'FirebaseCore'
-    pod 'FirebaseCrash'
     pod 'FirebaseDatabase'
     pod 'FirebaseDynamicLinks'
     pod 'FirebaseFirestore'
@@ -36,7 +37,7 @@ target 'SymbolCollisionTest' do
     pod 'Crashlytics'
     pod 'DigitsMigrationHelper'
     pod 'EarlGrey'
-    pod 'GeoFire'
+#    pod 'GeoFire' -- requires Firebase/Database 4.0
     pod 'google-cast-sdk'
     pod 'Google-Mobile-Ads-SDK'
     pod 'GoogleAnalytics'

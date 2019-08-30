@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
+#import <OCMock/OCMock.h>
 #import <XCTest/XCTest.h>
 
 #import <FirebaseCore/FIRAppInternal.h>
-#import <FirebaseInstanceID/FIRInstanceID.h>
-#import <OCMock/OCMock.h>
-#import "FIRMessaging_Private.h"
-#import "FIRMessaging.h"
-#import "FIRMessagingTestUtilities.h"
+#import <FirebaseInstanceID/FirebaseInstanceID.h>
+#import <FirebaseMessaging/FIRMessaging.h>
+
+#import "Firebase/Messaging/FIRMessaging_Private.h"
+#import "Example/Messaging/Tests/FIRMessagingTestUtilities.h"
 
 @interface FIRInstanceID (ExposedForTest)
 - (BOOL)isFCMAutoInitEnabled;
-+ (FIRInstanceID *)instanceIDForTests;
+- (instancetype)initPrivately;
+- (void)start;
 @end
 
 @interface FIRMessaging ()
@@ -43,7 +45,8 @@
 
 - (void)setUp {
   [super setUp];
-  _instanceID = [FIRInstanceID instanceIDForTests];
+  _instanceID = [[FIRInstanceID alloc] initPrivately];
+  [_instanceID start];
   _mockFirebaseApp = OCMClassMock([FIRApp class]);
   OCMStub([_mockFirebaseApp defaultApp]).andReturn(_mockFirebaseApp);
 }

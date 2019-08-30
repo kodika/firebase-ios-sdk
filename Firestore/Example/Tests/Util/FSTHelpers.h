@@ -20,35 +20,35 @@
 #include <unordered_map>
 #include <vector>
 
-#import "Firestore/Source/Model/FSTDocument.h"
-
+#include "Firestore/core/src/firebase/firestore/core/filter.h"
+#include "Firestore/core/src/firebase/firestore/core/view.h"
+#include "Firestore/core/src/firebase/firestore/core/view_snapshot.h"
+#include "Firestore/core/src/firebase/firestore/local/local_view_changes.h"
+#include "Firestore/core/src/firebase/firestore/local/query_data.h"
+#include "Firestore/core/src/firebase/firestore/model/delete_mutation.h"
+#include "Firestore/core/src/firebase/firestore/model/document.h"
 #include "Firestore/core/src/firebase/firestore/model/document_map.h"
+#include "Firestore/core/src/firebase/firestore/model/document_set.h"
 #include "Firestore/core/src/firebase/firestore/model/field_path.h"
 #include "Firestore/core/src/firebase/firestore/model/field_value.h"
+#include "Firestore/core/src/firebase/firestore/model/maybe_document.h"
+#include "Firestore/core/src/firebase/firestore/model/mutation.h"
+#include "Firestore/core/src/firebase/firestore/model/no_document.h"
+#include "Firestore/core/src/firebase/firestore/model/patch_mutation.h"
 #include "Firestore/core/src/firebase/firestore/model/resource_path.h"
+#include "Firestore/core/src/firebase/firestore/model/set_mutation.h"
+#include "Firestore/core/src/firebase/firestore/model/transform_mutation.h"
 #include "Firestore/core/src/firebase/firestore/model/types.h"
+#include "Firestore/core/src/firebase/firestore/model/unknown_document.h"
 #include "Firestore/core/src/firebase/firestore/remote/remote_event.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
 
 @class FIRGeoPoint;
-@class FSTDeleteMutation;
-@class FSTDeletedDocument;
-@class FSTDocument;
-@class FSTDocumentKeyReference;
-@class FSTDocumentSet;
-@class FSTFieldValue;
-@class FSTFilter;
-@class FSTLocalViewChanges;
-@class FSTPatchMutation;
-@class FSTQuery;
-@class FSTSetMutation;
-@class FSTSortOrder;
 @class FIRTimestamp;
-@class FSTTransformMutation;
-@class FSTView;
-@class FSTViewSnapshot;
-@class FSTObjectValue;
+@class FSTDocumentKeyReference;
+@class FSTLocalViewChanges;
+@class FSTUserDataConverter;
 
 namespace firebase {
 namespace firestore {
@@ -59,6 +59,10 @@ class RemoteEvent;
 }  // namespace remote
 }  // namespace firestore
 }  // namespace firebase
+
+namespace core = firebase::firestore::core;
+namespace local = firebase::firestore::local;
+namespace model = firebase::firestore::model;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -82,9 +86,9 @@ NS_ASSUME_NONNULL_BEGIN
             NSComparisonResult result = [left compare:right];                                      \
             NSComparisonResult inverseResult = [right compare:left];                               \
             XCTAssertEqual(result, expected, @"comparing %@ with %@ at (%lu, %lu)", left, right,   \
-                           i, j);                                                                  \
+                           (unsigned long)i, (unsigned long)j);                                    \
             XCTAssertEqual(inverseResult, -expected, @"comparing %@ with %@ at (%lu, %lu)", right, \
-                           left, j, i);                                                            \
+                           left, (unsigned long)j, (unsigned long)i);                              \
           }                                                                                        \
         }                                                                                          \
       }                                                                                            \
@@ -178,7 +182,7 @@ class TestTargetMetadataProvider : public TargetMetadataProvider {
       const std::vector<model::TargetId> &limbo_targets);
 
   /**
-   * Creates an `TestTargetMetadataProvider` that behaves as if there's an established listen for
+   * Creates a `TestTargetMetadataProvider` that behaves as if there's an established listen for
    * each of the given targets, where each target has not seen any previous document.
    *
    * Internally this means that the `GetRemoteKeysForTarget` callback for these targets will return
@@ -189,14 +193,14 @@ class TestTargetMetadataProvider : public TargetMetadataProvider {
       const model::DocumentKey &document_key, const std::vector<model::TargetId> &targets);
 
   /** Sets or replaces the local state for the provided query data. */
-  void SetSyncedKeys(model::DocumentKeySet keys, FSTQueryData *query_data);
+  void SetSyncedKeys(model::DocumentKeySet keys, local::QueryData query_data);
 
   model::DocumentKeySet GetRemoteKeysForTarget(model::TargetId target_id) const override;
-  FSTQueryData *GetQueryDataForTarget(model::TargetId target_id) const override;
+  absl::optional<local::QueryData> GetQueryDataForTarget(model::TargetId target_id) const override;
 
  private:
   std::unordered_map<model::TargetId, model::DocumentKeySet> synced_keys_;
-  std::unordered_map<model::TargetId, FSTQueryData *> query_data_;
+  std::unordered_map<model::TargetId, local::QueryData> query_data_;
 };
 
 }  // namespace remote
@@ -219,6 +223,9 @@ NSData *FSTTestData(int bytes, ...);
 /** Creates a new GeoPoint from the latitude and longitude values */
 FIRGeoPoint *FSTTestGeoPoint(double latitude, double longitude);
 
+/** Creates a user data converter set up for a generic project. */
+FSTUserDataConverter *FSTTestUserDataConverter();
+
 /**
  * Creates a new NSDateComponents from components. Note that year, month, and day are all
  * one-based.
@@ -226,11 +233,11 @@ FIRGeoPoint *FSTTestGeoPoint(double latitude, double longitude);
 NSDateComponents *FSTTestDateComponents(
     int year, int month, int day, int hour, int minute, int second);
 
-/** Wraps a plain value into an FSTFieldValue instance. */
-FSTFieldValue *FSTTestFieldValue(id _Nullable value);
+/** Wraps a plain value into an FieldValue instance. */
+model::FieldValue FSTTestFieldValue(id _Nullable value);
 
-/** Wraps a NSDictionary value into an FSTObjectValue instance. */
-FSTObjectValue *FSTTestObjectValue(NSDictionary<NSString *, id> *data);
+/** Wraps a NSDictionary value into an ObjectValue instance. */
+model::ObjectValue FSTTestObjectValue(NSDictionary<NSString *, id> *data);
 
 /** A convenience method for creating document keys for tests. */
 firebase::firestore::model::DocumentKey FSTTestDocKey(NSString *path);
@@ -238,95 +245,61 @@ firebase::firestore::model::DocumentKey FSTTestDocKey(NSString *path);
 /** Allow tests to just use an int literal for versions. */
 typedef int64_t FSTTestSnapshotVersion;
 
-/** A convenience method for creating docs for tests. */
-FSTDocument *FSTTestDoc(const absl::string_view path,
-                        FSTTestSnapshotVersion version,
-                        NSDictionary<NSString *, id> *data,
-                        FSTDocumentState documentState);
-
-/** A convenience method for creating deleted docs for tests. */
-FSTDeletedDocument *FSTTestDeletedDoc(const absl::string_view path,
-                                      FSTTestSnapshotVersion version,
-                                      BOOL hasCommittedMutations);
-
-/** A convenience method for creating unknown docs for tests. */
-FSTUnknownDocument *FSTTestUnknownDoc(const absl::string_view path, FSTTestSnapshotVersion version);
 /**
  * A convenience method for creating a document reference from a path string.
  */
 FSTDocumentKeyReference *FSTTestRef(std::string projectID, std::string databaseID, NSString *path);
 
-/** A convenience method for creating a query for the given path (without any other filters). */
-FSTQuery *FSTTestQuery(const absl::string_view path);
-
-/**
- * A convenience method to create a FSTFilter using a string representation for both field
- * and operator (<, <=, ==, >=, >, array_contains).
- */
-FSTFilter *FSTTestFilter(const absl::string_view field, NSString *op, id value);
-
-/** A convenience method for creating sort orders. */
-FSTSortOrder *FSTTestOrderBy(const absl::string_view field, NSString *direction);
-
-/**
- * Creates an NSComparator that will compare FSTDocuments by the given fieldPath string then by
- * key.
- */
-NSComparator FSTTestDocComparator(const absl::string_view fieldPath);
-
-/**
- * Creates a FSTDocumentSet based on the given comparator, initially containing the given
- * documents.
- */
-FSTDocumentSet *FSTTestDocSet(NSComparator comp, NSArray<FSTDocument *> *docs);
-
 /** Computes changes to the view with the docs and then applies them and returns the snapshot. */
-FSTViewSnapshot *_Nullable FSTTestApplyChanges(
-    FSTView *view,
-    NSArray<FSTMaybeDocument *> *docs,
+absl::optional<core::ViewSnapshot> FSTTestApplyChanges(
+    core::View *view,
+    const std::vector<model::MaybeDocument> &docs,
     const absl::optional<firebase::firestore::remote::TargetChange> &targetChange);
 
 /** Creates a set mutation for the document key at the given path. */
-FSTSetMutation *FSTTestSetMutation(NSString *path, NSDictionary<NSString *, id> *values);
+model::SetMutation FSTTestSetMutation(NSString *path, NSDictionary<NSString *, id> *values);
 
 /** Creates a patch mutation for the document key at the given path. */
-FSTPatchMutation *FSTTestPatchMutation(
-    const absl::string_view path,
+model::PatchMutation FSTTestPatchMutation(
+    absl::string_view path,
     NSDictionary<NSString *, id> *values,
     const std::vector<firebase::firestore::model::FieldPath> &updateMask);
 
 /**
- * Creates a FSTTransformMutation by parsing any FIRFieldValue sentinels in the provided data. The
+ * Creates a TransformMutation by parsing any FIRFieldValue sentinels in the provided data. The
  * data is expected to use dotted-notation for nested fields (i.e.
  * @{ @"foo.bar": [FIRFieldValue ...] } and must not contain any non-sentinel data.
  */
-FSTTransformMutation *FSTTestTransformMutation(NSString *path, NSDictionary<NSString *, id> *data);
+model::TransformMutation FSTTestTransformMutation(NSString *path,
+                                                  NSDictionary<NSString *, id> *data);
 
 /** Creates a delete mutation for the document key at the given path. */
-FSTDeleteMutation *FSTTestDeleteMutation(NSString *path);
+model::DeleteMutation FSTTestDeleteMutation(NSString *path);
 
 /** Converts a list of documents to a sorted map. */
-firebase::firestore::model::MaybeDocumentMap FSTTestDocUpdates(NSArray<FSTMaybeDocument *> *docs);
+firebase::firestore::model::MaybeDocumentMap FSTTestDocUpdates(
+    const std::vector<model::MaybeDocument> &docs);
 
 /** Creates a remote event that inserts a new document. */
 firebase::firestore::remote::RemoteEvent FSTTestAddedRemoteEvent(
-    FSTMaybeDocument *doc, const std::vector<firebase::firestore::model::TargetId> &addedToTargets);
+    const model::MaybeDocument &doc,
+    const std::vector<firebase::firestore::model::TargetId> &addedToTargets);
 
 /** Creates a remote event with changes to a document. */
 firebase::firestore::remote::RemoteEvent FSTTestUpdateRemoteEvent(
-    FSTMaybeDocument *doc,
+    const model::MaybeDocument &doc,
     const std::vector<firebase::firestore::model::TargetId> &updatedInTargets,
     const std::vector<firebase::firestore::model::TargetId> &removedFromTargets);
 
 /** Creates a remote event with changes to a document. Allows for identifying limbo targets */
 firebase::firestore::remote::RemoteEvent FSTTestUpdateRemoteEventWithLimboTargets(
-    FSTMaybeDocument *doc,
+    const model::MaybeDocument &doc,
     const std::vector<firebase::firestore::model::TargetId> &updatedInTargets,
     const std::vector<firebase::firestore::model::TargetId> &removedFromTargets,
     const std::vector<firebase::firestore::model::TargetId> &limboTargets);
 
 /** Creates a test view changes. */
-FSTLocalViewChanges *FSTTestViewChanges(firebase::firestore::model::TargetId targetID,
+local::LocalViewChanges TestViewChanges(firebase::firestore::model::TargetId targetID,
                                         NSArray<NSString *> *addedKeys,
                                         NSArray<NSString *> *removedKeys);
 

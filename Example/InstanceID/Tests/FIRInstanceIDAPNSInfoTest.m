@@ -68,12 +68,6 @@
   XCTAssertNil(info);
 }
 
-- (void)testAPNSInfoCreationFromInvalidArchive {
-  NSData *badData = [@"badData" dataUsingEncoding:NSUTF8StringEncoding];
-  FIRInstanceIDAPNSInfo *info = [NSKeyedUnarchiver unarchiveObjectWithData:badData];
-  XCTAssertNil(info);
-}
-
 // Test that archiving a FIRInstanceIDAPNSInfo object and restoring it from the archive
 // yields the same values for all the fields.
 - (void)testAPNSInfoEncodingAndDecoding {
@@ -83,8 +77,11 @@
   };
   FIRInstanceIDAPNSInfo *info =
       [[FIRInstanceIDAPNSInfo alloc] initWithTokenOptionsDictionary:validDictionary];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
   NSData *archive = [NSKeyedArchiver archivedDataWithRootObject:info];
   FIRInstanceIDAPNSInfo *restoredInfo = [NSKeyedUnarchiver unarchiveObjectWithData:archive];
+#pragma clang diagnostic pop
   XCTAssertEqualObjects(info.deviceToken, restoredInfo.deviceToken);
   XCTAssertEqual(info.sandbox, restoredInfo.sandbox);
 }

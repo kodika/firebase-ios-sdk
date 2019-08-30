@@ -25,16 +25,19 @@
 
 #include "Firestore/Protos/nanopb/google/firestore/v1/document.nanopb.h"
 #include "Firestore/Protos/nanopb/google/firestore/v1/firestore.nanopb.h"
+#include "Firestore/Protos/nanopb/google/type/latlng.nanopb.h"
 #include "Firestore/core/src/firebase/firestore/core/query.h"
 #include "Firestore/core/src/firebase/firestore/model/database_id.h"
 #include "Firestore/core/src/firebase/firestore/model/document.h"
 #include "Firestore/core/src/firebase/firestore/model/document_key.h"
 #include "Firestore/core/src/firebase/firestore/model/field_mask.h"
+#include "Firestore/core/src/firebase/firestore/model/field_transform.h"
 #include "Firestore/core/src/firebase/firestore/model/field_value.h"
 #include "Firestore/core/src/firebase/firestore/model/maybe_document.h"
 #include "Firestore/core/src/firebase/firestore/model/mutation.h"
 #include "Firestore/core/src/firebase/firestore/model/no_document.h"
 #include "Firestore/core/src/firebase/firestore/model/snapshot_version.h"
+#include "Firestore/core/src/firebase/firestore/nanopb/byte_string.h"
 #include "Firestore/core/src/firebase/firestore/nanopb/reader.h"
 #include "Firestore/core/src/firebase/firestore/nanopb/writer.h"
 #include "Firestore/core/src/firebase/firestore/util/hard_assert.h"
@@ -52,7 +55,7 @@ class LocalSerializer;
 namespace remote {
 
 template <typename T>
-T* MakeArray(size_t count) {
+T* MakeArray(pb_size_t count) {
   return reinterpret_cast<T*>(calloc(count, sizeof(T)));
 }
 
@@ -82,8 +85,7 @@ class Serializer {
    * @param database_id Must remain valid for the lifetime of this Serializer
    * object.
    */
-  explicit Serializer(
-      const firebase::firestore::model::DatabaseId& database_id);
+  explicit Serializer(model::DatabaseId database_id);
 
   /**
    * Encodes the string to nanopb bytes.
@@ -112,12 +114,6 @@ class Serializer {
    * cause all proto fields to be freed.
    */
   static pb_bytes_array_t* EncodeBytes(const std::vector<uint8_t>& bytes);
-
-  /**
-   * Decodes the nanopb bytes to a std::vector. If the input pointer is null,
-   * then this method will return an empty vector.
-   */
-  static std::vector<uint8_t> DecodeBytes(const pb_bytes_array_t* bytes);
 
   /**
    * Release memory allocated by the Encode* methods that return protos.
@@ -164,13 +160,13 @@ class Serializer {
   /**
    * @brief Converts from nanopb proto to the model Document format.
    */
-  std::unique_ptr<model::MaybeDocument> DecodeMaybeDocument(
+  model::MaybeDocument DecodeMaybeDocument(
       nanopb::Reader* reader,
       const google_firestore_v1_BatchGetDocumentsResponse& response) const;
 
   google_firestore_v1_Write EncodeMutation(
       const model::Mutation& mutation) const;
-  std::unique_ptr<model::Mutation> DecodeMutation(
+  model::Mutation DecodeMutation(
       nanopb::Reader* reader, const google_firestore_v1_Write& mutation) const;
 
   static google_firestore_v1_Precondition EncodePrecondition(
@@ -179,10 +175,19 @@ class Serializer {
       nanopb::Reader* reader,
       const google_firestore_v1_Precondition& precondition);
 
-  static google_firestore_v1_DocumentMask EncodeDocumentMask(
+  static google_firestore_v1_DocumentMask EncodeFieldMask(
       const model::FieldMask& mask);
-  static model::FieldMask DecodeDocumentMask(
+  static model::FieldMask DecodeFieldMask(
       const google_firestore_v1_DocumentMask& mask);
+
+  static google_firestore_v1_DocumentTransform_FieldTransform
+  EncodeFieldTransform(const model::FieldTransform& field_transform);
+  static model::FieldTransform DecodeFieldTransform(
+      nanopb::Reader* reader,
+      const google_firestore_v1_DocumentTransform_FieldTransform& proto);
+
+  static pb_bytes_array_t* EncodeFieldPath(const model::FieldPath& field_path);
+  static model::FieldPath DecodeFieldPath(const pb_bytes_array_t* field_path);
 
   /**
    * @brief Converts the Query into bytes, representing a
@@ -191,13 +196,8 @@ class Serializer {
   google_firestore_v1_Target_QueryTarget EncodeQueryTarget(
       const core::Query& query) const;
 
-  std::unique_ptr<model::Document> DecodeDocument(
+  model::Document DecodeDocument(
       nanopb::Reader* reader, const google_firestore_v1_Document& proto) const;
-
-  static void EncodeObjectMap(const model::ObjectValue::Map& object_value_map,
-                              uint32_t map_tag,
-                              uint32_t key_tag,
-                              uint32_t value_tag);
 
   static google_protobuf_Timestamp EncodeVersion(
       const model::SnapshotVersion& version);
@@ -215,21 +215,27 @@ class Serializer {
       nanopb::Reader* reader,
       const google_firestore_v1_Target_QueryTarget& proto);
 
- private:
-  std::unique_ptr<model::Document> DecodeFoundDocument(
-      nanopb::Reader* reader,
-      const google_firestore_v1_BatchGetDocumentsResponse& response) const;
-  std::unique_ptr<model::NoDocument> DecodeMissingDocument(
-      nanopb::Reader* reader,
-      const google_firestore_v1_BatchGetDocumentsResponse& response) const;
+  static google_type_LatLng EncodeGeoPoint(const GeoPoint& geo_point_value);
+  static GeoPoint DecodeGeoPoint(nanopb::Reader* reader,
+                                 const google_type_LatLng& latlng_proto);
 
-  static void EncodeFieldsEntry(const model::ObjectValue::Map::value_type& kv,
-                                uint32_t key_tag,
-                                uint32_t value_tag);
+  static google_firestore_v1_ArrayValue EncodeArray(
+      const std::vector<model::FieldValue>& array_value);
+  static std::vector<model::FieldValue> DecodeArray(
+      nanopb::Reader* reader,
+      const google_firestore_v1_ArrayValue& array_proto);
+
+ private:
+  model::Document DecodeFoundDocument(
+      nanopb::Reader* reader,
+      const google_firestore_v1_BatchGetDocumentsResponse& response) const;
+  model::NoDocument DecodeMissingDocument(
+      nanopb::Reader* reader,
+      const google_firestore_v1_BatchGetDocumentsResponse& response) const;
 
   std::string EncodeQueryPath(const model::ResourcePath& path) const;
 
-  const model::DatabaseId& database_id_;
+  model::DatabaseId database_id_;
   const std::string database_name_;
 };
 

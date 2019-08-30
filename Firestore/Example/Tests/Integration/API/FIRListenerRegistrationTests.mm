@@ -20,7 +20,6 @@
 
 #import "Firestore/Example/Tests/Util/FSTIntegrationTestCase.h"
 #import "Firestore/Source/API/FIRFirestore+Internal.h"
-#import "Firestore/Source/Core/FSTFirestoreClient.h"
 
 @interface FIRListenerRegistrationTests : FSTIntegrationTestCase
 @end
@@ -126,6 +125,32 @@
 
   // No more events should occur
   [two remove];
+}
+
+- (void)testCanOutliveDocumentReference {
+  FIRCollectionReference *collectionRef = [self collectionRef];
+
+  XCTestExpectation *seen = [self expectationWithDescription:@"seen document"];
+
+  __block id<FIRListenerRegistration> registration;
+  NSString *documentID;
+  @autoreleasepool {
+    FIRDocumentReference *docRef = [collectionRef documentWithAutoID];
+    documentID = docRef.documentID;
+    registration = [docRef addSnapshotListener:^(FIRDocumentSnapshot *snapshot, NSError *error) {
+      if (snapshot.exists) {
+        [seen fulfill];
+      }
+    }];
+    docRef = nil;
+  }
+
+  XCTAssertNotNil(registration);
+
+  FIRDocumentReference *docRef2 = [collectionRef documentWithPath:documentID];
+  [self writeDocumentRef:docRef2 data:@{@"foo" : @"bar"}];
+
+  [registration remove];
 }
 
 @end

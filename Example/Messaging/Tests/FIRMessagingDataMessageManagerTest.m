@@ -14,28 +14,23 @@
  * limitations under the License.
  */
 
+#import <OCMock/OCMock.h>
 #import <XCTest/XCTest.h>
 
-#import <OCMock/OCMock.h>
+#import <FirebaseMessaging/FIRMessaging.h>
 
-#import "Protos/GtalkCore.pbobjc.h"
-
-#import "FIRMessaging.h"
-#import "FIRMessagingClient.h"
-#import "FIRMessagingConnection.h"
-#import "FIRMessagingDataMessageManager.h"
-#import "FIRMessagingReceiver.h"
-#import "FIRMessagingRmqManager.h"
-#import "FIRMessagingSyncMessageManager.h"
-#import "FIRMessagingUtilities.h"
-#import "FIRMessaging_Private.h"
-#import "FIRMessagingConstants.h"
-#import "FIRMessagingDefines.h"
-#import "NSError+FIRMessaging.h"
-
-static NSString *const kFIRMessagingUserDefaultsSuite = @"FIRMessagingClientTestUserDefaultsSuite";
-
-static NSString *const kFIRMessagingAppIDToken = @"1234abcdef789";
+#import "Firebase/Messaging/FIRMessagingClient.h"
+#import "Firebase/Messaging/FIRMessagingConnection.h"
+#import "Firebase/Messaging/FIRMessagingDataMessageManager.h"
+#import "Firebase/Messaging/FIRMessagingReceiver.h"
+#import "Firebase/Messaging/FIRMessagingRmqManager.h"
+#import "Firebase/Messaging/FIRMessagingSyncMessageManager.h"
+#import "Firebase/Messaging/FIRMessagingUtilities.h"
+#import "Firebase/Messaging/FIRMessaging_Private.h"
+#import "Firebase/Messaging/FIRMessagingConstants.h"
+#import "Firebase/Messaging/FIRMessagingDefines.h"
+#import "Firebase/Messaging/NSError+FIRMessaging.h"
+#import "Firebase/Messaging/Protos/GtalkCore.pbobjc.h"
 
 static NSString *const kMessagePersistentID = @"abcdef123";
 static NSString *const kMessageFrom = @"com.example.gcm";
@@ -108,7 +103,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
                error:[OCMArg anyObjectRef]];
 
   // should be logged into the service
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
   // try to send messages with no connection should be queued into RMQ
   NSMutableDictionary *message = [self upstreamMessageWithID:messageID ttl:-1 delay:0];
@@ -158,7 +152,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
                           }]]);
 
   // should be logged into the service
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
   [self.dataMessageManager sendDataMessageStanza:message];
 
@@ -187,7 +180,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
                             return NO;
                           }]]);
 
-  [self addFakeFIRMessagingRegistrationToken];
   // should be logged into the service
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
   [self.dataMessageManager sendDataMessageStanza:message];
@@ -215,7 +207,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
 
   // should be logged into the service
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager sendDataMessageStanza:message];
 
   OCMVerifyAll(self.mockReceiver);
@@ -240,7 +231,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
   OCMExpect([self.mockClient sendMessage:[OCMArg checkWithBlock:isValidStanza]]);
 
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager sendDataMessageStanza:message];
 
   OCMVerifyAll(self.mockClient);
@@ -273,10 +263,9 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
   // should save the message to be sent when we reconnect the next time
   OCMExpect([self.mockClient sendOnConnectOrDrop:[OCMArg checkWithBlock:isValidStanza]]);
   // should also try to reconnect immediately
-  OCMExpect([self.mockClient retryConnectionImmediately:[OCMArg isEqual:@YES]]);
+  OCMExpect([self.mockClient retryConnectionImmediately:YES]);
 
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager sendDataMessageStanza:message];
 
   OCMVerifyAll(self.mockClient);
@@ -302,7 +291,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
   }]]);
 
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager sendDataMessageStanza:message];
 
   OCMVerifyAll(self.mockReceiver);
@@ -329,7 +317,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
                                                    error:[OCMArg isNil]]);
 
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager sendDataMessageStanza:message];
 
   __block FIRMessagingDataMessageHandler dataMessageHandler;
@@ -388,7 +375,8 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
 - (void)testSendDelayedMessage_shouldNotSend {
   // should not send a delayed message even with an active connection
   // simulate active connection
-  [[[self.mockClient stub] andReturnValue:OCMOCK_VALUE(YES)] isConnectionActive];
+  [[[self.mockClient stub] andReturnValue:[NSNumber numberWithBool:YES]]
+    isConnectionActive];
   [[self.mockClient reject] sendMessage:[OCMArg any]];
 
   [[self.mockReceiver reject] didSendDataMessageWithID:[OCMArg any]];
@@ -496,7 +484,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
   // have a real RMQ store
   [self.dataMessageManager setRmq2Manager:newRmqManager];
 
-  [self addFakeFIRMessagingRegistrationToken];
   [self.dataMessageManager setDeviceAuthID:@"auth-id" secretToken:@"secret-token"];
 
   // send a couple of message with no connection should be saved to RMQ
@@ -574,12 +561,6 @@ static NSString *const kRmqDatabaseName = @"gcm-dmm-test";
     XCTFail(@"RMQ should not have any message");
   }
                         dataMessageHandler:nil];
-}
-
-#pragma mark - Private
-
-- (void)addFakeFIRMessagingRegistrationToken {
-  // [[FIRMessagingDefaultsManager sharedInstance] saveAppIDToken:kFIRMessagingAppIDToken];
 }
 
 #pragma mark - Create Packet

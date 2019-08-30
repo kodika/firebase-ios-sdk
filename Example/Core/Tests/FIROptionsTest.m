@@ -100,6 +100,11 @@ extern NSString *const kFIRLibraryVersionID;
 - (void)testInitWithContentsOfFile {
   NSString *filePath = [[NSBundle mainBundle] pathForResource:@"GoogleService-Info"
                                                        ofType:@"plist"];
+  if (filePath == nil) {
+    // Use bundleForClass to allow GoogleService-Info.plist to be in the test target's bundle.
+    NSBundle *bundle = [NSBundle bundleForClass:[self class]];
+    filePath = [bundle pathForResource:@"GoogleService-Info" ofType:@"plist"];
+  }
   FIROptions *options = [[FIROptions alloc] initWithContentsOfFile:filePath];
   [self assertOptionsMatchDefaults:options andProjectID:YES];
   XCTAssertNil(options.deepLinkURLScheme);
@@ -192,6 +197,11 @@ extern NSString *const kFIRLibraryVersionID;
   options.storageBucket = mutableString;
   [mutableString appendString:@"2"];
   XCTAssertEqualObjects(options.storageBucket, @"1");
+
+  mutableString = [[NSMutableString alloc] initWithString:@"1"];
+  options.appGroupID = mutableString;
+  [mutableString appendString:@"2"];
+  XCTAssertEqualObjects(options.appGroupID, @"1");
 }
 
 - (void)testCopyWithZone {
@@ -575,12 +585,26 @@ extern NSString *const kFIRLibraryVersionID;
   XCTAssertEqual(numberOfMatches, 1, @"Incorrect library version format.");
 }
 
+// TODO: The version test will break when the Firebase major version hits 10.
 - (void)testVersionConsistency {
   const char *versionString = [kFIRLibraryVersionID UTF8String];
   int major = versionString[0] - '0';
   int minor = (versionString[1] - '0') * 10 + versionString[2] - '0';
   int patch = (versionString[3] - '0') * 10 + versionString[4] - '0';
   NSString *str = [NSString stringWithFormat:@"%d.%d.%d", major, minor, patch];
+  XCTAssertEqualObjects(str, [NSString stringWithUTF8String:(const char *)FIRCoreVersionString]);
+}
+
+// Repeat test with more Objective-C.
+// TODO: The version test will break when the Firebase major version hits 10.
+- (void)testVersionConsistency2 {
+  NSRange major = NSMakeRange(0, 1);
+  NSRange minor = NSMakeRange(1, 2);
+  NSRange patch = NSMakeRange(3, 2);
+  NSString *str =
+      [NSString stringWithFormat:@"%@.%d.%d", [kFIRLibraryVersionID substringWithRange:major],
+                                 [[kFIRLibraryVersionID substringWithRange:minor] intValue],
+                                 [[kFIRLibraryVersionID substringWithRange:patch] intValue]];
   XCTAssertEqualObjects(str, [NSString stringWithUTF8String:(const char *)FIRCoreVersionString]);
 }
 

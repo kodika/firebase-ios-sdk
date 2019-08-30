@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'FirebaseFirestore'
-  s.version          = '1.0.1'
+  s.version          = '1.4.5'
   s.summary          = 'Google Cloud Firestore for iOS'
 
   s.description      = <<-DESC
@@ -17,29 +17,27 @@ Google Cloud Firestore is a NoSQL document database built for automatic scaling,
   }
 
   s.ios.deployment_target = '8.0'
-  s.osx.deployment_target = '10.10'
+  s.osx.deployment_target = '10.11'
+  s.tvos.deployment_target = '10.0'
 
   s.cocoapods_version = '>= 1.4.0'
   s.static_framework = true
   s.prefix_header_file = false
 
   s.source_files = [
-    'Firestore/Source/**/*',
+    'Firestore/Source/**/*.{h,m,mm}',
     'Firestore/Protos/nanopb/**/*.{h,cc}',
     'Firestore/Protos/objc/**/*.[hm]',
     'Firestore/core/include/**/*.{h,cc,mm}',
     'Firestore/core/src/**/*.{h,cc,mm}',
-    'Firestore/third_party/Immutable/*.[mh]',
   ]
   s.requires_arc = [
     'Firestore/Source/**/*',
     'Firestore/core/src/**/*.mm',
-    'Firestore/third_party/Immutable/*.[mh]'
   ]
   s.exclude_files = [
-    'Firestore/third_party/Immutable/Tests/**',
-
     # Exclude alternate implementations for other platforms
+    'Firestore/core/src/firebase/firestore/api/input_validation_std.cc',
     'Firestore/core/src/firebase/firestore/remote/connectivity_monitor_noop.cc',
     'Firestore/core/src/firebase/firestore/remote/grpc_root_certificate_finder_generated.cc',
     'Firestore/core/src/firebase/firestore/util/filesystem_win.cc',
@@ -50,14 +48,15 @@ Google Cloud Firestore is a NoSQL document database built for automatic scaling,
   s.public_header_files = 'Firestore/Source/Public/*.h'
 
   s.dependency 'FirebaseAuthInterop', '~> 1.0'
-  s.dependency 'FirebaseCore', '~> 5.2'
-  s.dependency 'gRPC-C++', '0.0.6'
-  s.dependency 'leveldb-library', '~> 1.20'
+  s.dependency 'FirebaseCore', '~> 6.2'
+  s.dependency 'gRPC-C++', '0.0.9'
+  s.dependency 'leveldb-library', '~> 1.22'
   s.dependency 'Protobuf', '~> 3.1'
   s.dependency 'nanopb', '~> 0.3.901'
 
   s.ios.frameworks = 'MobileCoreServices', 'SystemConfiguration'
   s.osx.frameworks = 'SystemConfiguration'
+  s.tvos.frameworks = 'SystemConfiguration'
 
   s.library = 'c++'
   s.pod_target_xcconfig = {
@@ -72,6 +71,7 @@ Google Cloud Firestore is a NoSQL document database built for automatic scaling,
       'PB_FIELD_32BIT=1 PB_NO_PACKED_STRUCTS=1 PB_ENABLE_MALLOC=1',
     'HEADER_SEARCH_PATHS' =>
       '"${PODS_TARGET_SRCROOT}" ' +
+      '"${PODS_TARGET_SRCROOT}/Firestore/Source/Public" ' +
       '"${PODS_TARGET_SRCROOT}/Firestore/third_party/abseil-cpp" ' +
       '"${PODS_ROOT}/nanopb" ' +
       '"${PODS_TARGET_SRCROOT}/Firestore/Protos/nanopb"',
@@ -95,10 +95,27 @@ Google Cloud Firestore is a NoSQL document database built for automatic scaling,
       'Firestore/third_party/abseil-cpp/**/*.cc'
     ]
     ss.exclude_files = [
+      # Exclude tests and benchmarks from the framework.
       'Firestore/third_party/abseil-cpp/**/*_benchmark.cc',
       'Firestore/third_party/abseil-cpp/**/*test*.cc',
       'Firestore/third_party/abseil-cpp/absl/hash/internal/print_hash_of.cc',
-      'Firestore/third_party/abseil-cpp/absl/synchronization/internal/mutex_nonprod.cc',
+
+      # Exclude CMake-related everything, including tests
+      'Firestore/third_party/abseil-cpp/CMake/**/*.cc',
+
+      # Avoid the debugging package which uses code that isn't portable to
+      # ARM (see stack_consumption.cc) and uses syscalls not available on
+      # tvOS (e.g. sigaltstack).
+      'Firestore/third_party/abseil-cpp/absl/debugging/**/*.cc',
+
+      # Dropping the debugging package prevents downstream usage of this in the
+      # abseil sources.
+      'Firestore/third_party/abseil-cpp/absl/container/internal/hashtable_debug*',
+      'Firestore/third_party/abseil-cpp/absl/container/internal/hashtablez_sampler*',
+
+      # Exclude the synchronization package because it's dead weight: we don't
+      # write the kind of heavily threaded code that might benefit from it.
+      'Firestore/third_party/abseil-cpp/absl/synchronization/**/*.cc',
     ]
 
     ss.library = 'c++'

@@ -18,6 +18,7 @@
 
 #import <XCTest/XCTest.h>
 
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -25,29 +26,38 @@
 #import "Firestore/Example/Tests/Util/FSTHelpers.h"
 #import "Firestore/Source/API/FIRDocumentChange+Internal.h"
 #import "Firestore/Source/API/FIRDocumentSnapshot+Internal.h"
+#import "Firestore/Source/API/FIRFirestore+Internal.h"
 #import "Firestore/Source/API/FIRQuerySnapshot+Internal.h"
 #import "Firestore/Source/API/FIRSnapshotMetadata+Internal.h"
-#import "Firestore/Source/Core/FSTViewSnapshot.h"
-#import "Firestore/Source/Model/FSTDocument.h"
-#import "Firestore/Source/Model/FSTDocumentSet.h"
 
+#include "Firestore/core/src/firebase/firestore/core/query.h"
+#include "Firestore/core/src/firebase/firestore/core/view_snapshot.h"
+#include "Firestore/core/src/firebase/firestore/model/document.h"
+#include "Firestore/core/src/firebase/firestore/model/document_set.h"
 #include "Firestore/core/src/firebase/firestore/util/string_apple.h"
+#include "Firestore/core/test/firebase/firestore/testutil/testutil.h"
 
 namespace util = firebase::firestore::util;
+namespace testutil = firebase::firestore::testutil;
+
+using firebase::firestore::api::DocumentChange;
+using firebase::firestore::api::DocumentSnapshot;
+using firebase::firestore::api::Firestore;
+using firebase::firestore::api::SnapshotMetadata;
 using firebase::firestore::core::DocumentViewChange;
+using firebase::firestore::core::ViewSnapshot;
+using firebase::firestore::model::Document;
+using firebase::firestore::model::DocumentComparator;
 using firebase::firestore::model::DocumentKeySet;
+using firebase::firestore::model::DocumentSet;
+using firebase::firestore::model::DocumentState;
+
+using testutil::Doc;
+using testutil::DocSet;
+using testutil::Map;
+using testutil::Query;
 
 NS_ASSUME_NONNULL_BEGIN
-
-@interface FIRDocumentChange ()
-
-// Expose initializer for testing.
-- (instancetype)initWithType:(FIRDocumentChangeType)type
-                    document:(FIRQueryDocumentSnapshot *)document
-                    oldIndex:(NSUInteger)oldIndex
-                    newIndex:(NSUInteger)newIndex;
-
-@end
 
 @interface FIRQuerySnapshotTests : XCTestCase
 @end
@@ -55,15 +65,16 @@ NS_ASSUME_NONNULL_BEGIN
 @implementation FIRQuerySnapshotTests
 
 - (void)testEquals {
-  FIRQuerySnapshot *foo = FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, YES, NO);
-  FIRQuerySnapshot *fooDup = FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, YES, NO);
+  FIRQuerySnapshot *foo = FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, true, false);
+  FIRQuerySnapshot *fooDup = FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, true, false);
   FIRQuerySnapshot *differentPath =
-      FSTTestQuerySnapshot("bar", @{}, @{@"a" : @{@"a" : @1}}, YES, NO);
+      FSTTestQuerySnapshot("bar", @{}, @{@"a" : @{@"a" : @1}}, true, false);
   FIRQuerySnapshot *differentDoc =
-      FSTTestQuerySnapshot("foo", @{@"a" : @{@"b" : @1}}, @{}, YES, NO);
+      FSTTestQuerySnapshot("foo", @{@"a" : @{@"b" : @1}}, @{}, true, false);
   FIRQuerySnapshot *noPendingWrites =
-      FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, NO, NO);
-  FIRQuerySnapshot *fromCache = FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, YES, YES);
+      FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, false, false);
+  FIRQuerySnapshot *fromCache =
+      FSTTestQuerySnapshot("foo", @{}, @{@"a" : @{@"a" : @1}}, true, true);
   XCTAssertEqualObjects(foo, fooDup);
   XCTAssertNotEqualObjects(foo, differentPath);
   XCTAssertNotEqualObjects(foo, differentDoc);
@@ -78,64 +89,49 @@ NS_ASSUME_NONNULL_BEGIN
 }
 
 - (void)testIncludeMetadataChanges {
-  FSTDocument *doc1Old = FSTTestDoc("foo/bar", 1, @{@"a" : @"b"}, FSTDocumentStateLocalMutations);
-  FSTDocument *doc1New = FSTTestDoc("foo/bar", 1, @{@"a" : @"b"}, FSTDocumentStateSynced);
+  Document doc1Old = Doc("foo/bar", 1, Map("a", "b"), DocumentState::kLocalMutations);
+  Document doc1New = Doc("foo/bar", 1, Map("a", "b"), DocumentState::kSynced);
 
-  FSTDocument *doc2Old = FSTTestDoc("foo/baz", 1, @{@"a" : @"b"}, FSTDocumentStateSynced);
-  FSTDocument *doc2New = FSTTestDoc("foo/baz", 1, @{@"a" : @"c"}, FSTDocumentStateSynced);
+  Document doc2Old = Doc("foo/baz", 1, Map("a", "b"));
+  Document doc2New = Doc("foo/baz", 1, Map("a", "c"));
 
-  FSTDocumentSet *oldDocuments = FSTTestDocSet(FSTDocumentComparatorByKey, @[ doc1Old, doc2Old ]);
-  FSTDocumentSet *newDocuments = FSTTestDocSet(FSTDocumentComparatorByKey, @[ doc2New, doc2New ]);
+  DocumentSet oldDocuments = DocSet(DocumentComparator::ByKey(), {doc1Old, doc2Old});
+  DocumentSet newDocuments = DocSet(DocumentComparator::ByKey(), {doc2New, doc2New});
   std::vector<DocumentViewChange> documentChanges{
-      DocumentViewChange{doc1New, DocumentViewChange::Type::kMetadata},
-      DocumentViewChange{doc2New, DocumentViewChange::Type::kModified},
+      DocumentViewChange(doc1New, DocumentViewChange::Type::Metadata),
+      DocumentViewChange(doc2New, DocumentViewChange::Type::Modified),
   };
 
-  FIRFirestore *firestore = FSTTestFirestore();
-  FSTQuery *query = FSTTestQuery("foo");
-  FSTViewSnapshot *viewSnapshot = [[FSTViewSnapshot alloc] initWithQuery:query
-                                                               documents:newDocuments
-                                                            oldDocuments:oldDocuments
-                                                         documentChanges:std::move(documentChanges)
-                                                               fromCache:NO
-                                                             mutatedKeys:DocumentKeySet {}
-                                                        syncStateChanged:YES
-                                                 excludesMetadataChanges:NO];
-  FIRSnapshotMetadata *metadata = [FIRSnapshotMetadata snapshotMetadataWithPendingWrites:NO
-                                                                               fromCache:NO];
-  FIRQuerySnapshot *snapshot = [FIRQuerySnapshot snapshotWithFirestore:firestore
-                                                         originalQuery:query
-                                                              snapshot:viewSnapshot
-                                                              metadata:metadata];
+  std::shared_ptr<Firestore> firestore = FSTTestFirestore().wrapped;
+  core::Query query = Query("foo");
+  ViewSnapshot viewSnapshot(query, newDocuments, oldDocuments, std::move(documentChanges),
+                            /*mutated_keys=*/DocumentKeySet(),
+                            /*from_cache=*/false,
+                            /*sync_state_changed=*/true,
+                            /*excludes_metadata_changes=*/false);
+  SnapshotMetadata metadata(/*pending_writes=*/false, /*from_cache=*/false);
+  FIRQuerySnapshot *snapshot = [[FIRQuerySnapshot alloc] initWithFirestore:firestore
+                                                             originalQuery:query
+                                                                  snapshot:std::move(viewSnapshot)
+                                                                  metadata:std::move(metadata)];
 
-  FIRQueryDocumentSnapshot *doc1Snap = [FIRQueryDocumentSnapshot snapshotWithFirestore:firestore
-                                                                           documentKey:doc1New.key
-                                                                              document:doc1New
-                                                                             fromCache:NO
-                                                                      hasPendingWrites:NO];
-  FIRQueryDocumentSnapshot *doc2Snap = [FIRQueryDocumentSnapshot snapshotWithFirestore:firestore
-                                                                           documentKey:doc2New.key
-                                                                              document:doc2New
-                                                                             fromCache:NO
-                                                                      hasPendingWrites:NO];
+  DocumentSnapshot doc1Snap(firestore, doc1New.key(), doc1New, SnapshotMetadata());
+  DocumentSnapshot doc2Snap(firestore, doc2New.key(), doc2New, SnapshotMetadata());
 
   NSArray<FIRDocumentChange *> *changesWithoutMetadata = @[
-    [[FIRDocumentChange alloc] initWithType:FIRDocumentChangeTypeModified
-                                   document:doc2Snap
-                                   oldIndex:1
-                                   newIndex:1],
+    [[FIRDocumentChange alloc]
+        initWithDocumentChange:DocumentChange(DocumentChange::Type::Modified, doc2Snap,
+                                              /*old_index=*/1, /*new_index=*/1)],
   ];
   XCTAssertEqualObjects(snapshot.documentChanges, changesWithoutMetadata);
 
   NSArray<FIRDocumentChange *> *changesWithMetadata = @[
-    [[FIRDocumentChange alloc] initWithType:FIRDocumentChangeTypeModified
-                                   document:doc1Snap
-                                   oldIndex:0
-                                   newIndex:0],
-    [[FIRDocumentChange alloc] initWithType:FIRDocumentChangeTypeModified
-                                   document:doc2Snap
-                                   oldIndex:1
-                                   newIndex:1],
+    [[FIRDocumentChange alloc]
+        initWithDocumentChange:DocumentChange(DocumentChange::Type::Modified, doc1Snap,
+                                              /*old_index=*/0, /*new_index=*/0)],
+    [[FIRDocumentChange alloc]
+        initWithDocumentChange:DocumentChange(DocumentChange::Type::Modified, doc2Snap,
+                                              /*old_index=*/1, /*new_index=*/1)],
   ];
   XCTAssertEqualObjects([snapshot documentChangesWithIncludeMetadataChanges:YES],
                         changesWithMetadata);

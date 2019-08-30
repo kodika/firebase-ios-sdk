@@ -48,9 +48,10 @@ using Type = GrpcCompletion::Type;
 class GrpcUnaryCallTest : public testing::Test {
  public:
   GrpcUnaryCallTest()
-      : worker_queue{absl::make_unique<ExecutorStd>()},
+      : worker_queue{std::make_shared<AsyncQueue>(
+            absl::make_unique<ExecutorStd>())},
         connectivity_monitor{CreateNoOpConnectivityMonitor()},
-        tester{&worker_queue, connectivity_monitor.get()},
+        tester{worker_queue, connectivity_monitor.get()},
         call{tester.CreateUnaryCall()} {
   }
 
@@ -58,7 +59,7 @@ class GrpcUnaryCallTest : public testing::Test {
     if (call) {
       // It's okay to call `FinishImmediately` more than once.
       KeepPollingGrpcQueue();
-      worker_queue.EnqueueBlocking([&] { call->FinishImmediately(); });
+      worker_queue->EnqueueBlocking([&] { call->FinishImmediately(); });
     }
     tester.Shutdown();
   }
@@ -79,7 +80,7 @@ class GrpcUnaryCallTest : public testing::Test {
     tester.KeepPollingGrpcQueue();
   }
 
-  AsyncQueue worker_queue;
+  std::shared_ptr<AsyncQueue> worker_queue;
 
   std::unique_ptr<ConnectivityMonitor> connectivity_monitor;
   GrpcStreamTester tester;
@@ -92,13 +93,13 @@ class GrpcUnaryCallTest : public testing::Test {
 // Correct API usage
 
 TEST_F(GrpcUnaryCallTest, FinishImmediatelyIsIdempotent) {
-  worker_queue.EnqueueBlocking(
+  worker_queue->EnqueueBlocking(
       [&] { EXPECT_NO_THROW(call->FinishImmediately()); });
 
   StartCall();
 
   KeepPollingGrpcQueue();
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     EXPECT_NO_THROW(call->FinishImmediately());
     EXPECT_NO_THROW(call->FinishImmediately());
   });
@@ -113,32 +114,15 @@ TEST_F(GrpcUnaryCallTest, CanGetResponseHeadersAfterFinishing) {
   StartCall();
 
   KeepPollingGrpcQueue();
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     call->FinishImmediately();
     EXPECT_NO_THROW(call->GetResponseHeaders());
   });
 }
 
-// Method prerequisites -- incorrect usage
-
-// Death tests should contain the word "DeathTest" in their name -- see
-// https://github.com/google/googletest/blob/master/googletest/docs/advanced.md#death-test-naming
-using GrpcUnaryCallDeathTest = GrpcUnaryCallTest;
-
-TEST_F(GrpcUnaryCallDeathTest, CannotStartTwice) {
-  StartCall();
-  EXPECT_DEATH_IF_SUPPORTED(StartCall(), "");
-}
-
-TEST_F(GrpcUnaryCallDeathTest, CannotRestart) {
-  StartCall();
-  ForceFinish({{Type::Finish, CompletionResult::Ok}});
-  EXPECT_DEATH_IF_SUPPORTED(StartCall(), "");
-}
-
 TEST_F(GrpcUnaryCallTest, CannotFinishAndNotifyBeforeStarting) {
   // No callback has been assigned.
-  worker_queue.EnqueueBlocking(
+  worker_queue->EnqueueBlocking(
       [&] { EXPECT_ANY_THROW(call->FinishAndNotify(Status::OK())); });
 }
 
@@ -161,14 +145,14 @@ TEST_F(GrpcUnaryCallTest, Error) {
                 grpc::Status{grpc::UNAVAILABLE, ""}}});
 
   ASSERT_TRUE(status.has_value());
-  EXPECT_EQ(status.value().code(), FirestoreErrorCode::Unavailable);
+  EXPECT_EQ(status.value().code(), Error::Unavailable);
   EXPECT_TRUE(ByteBufferToString(response).empty());
 }
 
 // Callback destroys reader
 
 TEST_F(GrpcUnaryCallTest, CallbackCanDestroyCallOnSuccess) {
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     call->Start([this](const StatusOr<grpc::ByteBuffer>&) { call.reset(); });
   });
 
@@ -178,7 +162,7 @@ TEST_F(GrpcUnaryCallTest, CallbackCanDestroyCallOnSuccess) {
 }
 
 TEST_F(GrpcUnaryCallTest, CallbackCanDestroyCallOnError) {
-  worker_queue.EnqueueBlocking([&] {
+  worker_queue->EnqueueBlocking([&] {
     call->Start([this](const StatusOr<grpc::ByteBuffer>&) { call.reset(); });
   });
 

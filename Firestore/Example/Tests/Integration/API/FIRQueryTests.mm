@@ -18,6 +18,8 @@
 
 #import <XCTest/XCTest.h>
 
+#import "Firestore/Source/API/FIRQuery+Internal.h"
+
 #import "Firestore/Example/Tests/Util/FSTEventAccumulator.h"
 #import "Firestore/Example/Tests/Util/FSTIntegrationTestCase.h"
 
@@ -252,6 +254,35 @@
   [registration remove];
 }
 
+- (void)testDocumentChangesUseNSNotFound {
+  NSDictionary *testDocs = @{
+    @"a" : @{@"foo" : @1},
+  };
+  FIRCollectionReference *collection = [self collectionRefWithDocuments:testDocs];
+
+  id<FIRListenerRegistration> registration =
+      [collection addSnapshotListener:self.eventAccumulator.valueEventHandler];
+
+  FIRQuerySnapshot *querySnap = [self.eventAccumulator awaitEventWithName:@"initial event"];
+  XCTAssertEqual(querySnap.documentChanges.count, 1);
+
+  FIRDocumentChange *change = querySnap.documentChanges[0];
+  XCTAssertEqual(change.oldIndex, NSNotFound);
+  XCTAssertEqual(change.newIndex, 0);
+
+  FIRDocumentReference *doc = change.document.reference;
+  [self deleteDocumentRef:doc];
+
+  querySnap = [self.eventAccumulator awaitEventWithName:@"delete"];
+  XCTAssertEqual(querySnap.documentChanges.count, 1);
+
+  change = querySnap.documentChanges[0];
+  XCTAssertEqual(change.oldIndex, 0);
+  XCTAssertEqual(change.newIndex, NSNotFound);
+
+  [registration remove];
+}
+
 - (void)testCanHaveMultipleMutationsWhileOffline {
   FIRCollectionReference *col = [self collectionRef];
 
@@ -273,7 +304,7 @@
                         ]));
 }
 
-- (void)testArrayContainsQueries {
+- (void)testQueriesCanUseArrayContainsFilters {
   NSDictionary *testDocs = @{
     @"a" : @{@"array" : @[ @42 ]},
     @"b" : @{@"array" : @[ @"a", @42, @"c" ]},
@@ -285,13 +316,191 @@
   // Search for 42
   FIRQuerySnapshot *snapshot = [self readDocumentSetForRef:[collection queryWhereField:@"array"
                                                                          arrayContains:@42]];
-  XCTAssertEqualObjects(FIRQuerySnapshotGetData(snapshot), (@[
-                          @{@"array" : @[ @42 ]}, @{@"array" : @[ @"a", @42, @"c" ]},
-                          @{@"array" : @[ @42 ], @"array2" : @[ @"bingo" ]}
-                        ]));
+  XCTAssertEqualObjects(FIRQuerySnapshotGetData(snapshot),
+                        (@[ testDocs[@"a"], testDocs[@"b"], testDocs[@"d"] ]));
 
   // NOTE: The backend doesn't currently support null, NaN, objects, or arrays, so there isn't much
   // of anything else interesting to test.
+}
+
+- (void)testQueriesCanUseInFilters {
+  // TODO(b/138855186): Re-enable in prod once feature lands in backend.
+  if (![FSTIntegrationTestCase isRunningAgainstEmulator]) return;
+
+  NSDictionary *testDocs = @{
+    @"a" : @{@"zip" : @98101},
+    @"b" : @{@"zip" : @91102},
+    @"c" : @{@"zip" : @98103},
+    @"d" : @{@"zip" : @[ @98101 ]},
+    @"e" : @{@"zip" : @[ @"98101", @{@"zip" : @98101} ]},
+    @"f" : @{@"zip" : @{@"code" : @500}}
+  };
+  FIRCollectionReference *collection = [self collectionRefWithDocuments:testDocs];
+
+  // Search for zips matching [98101, 98103].
+  FIRQuerySnapshot *snapshot =
+      [self readDocumentSetForRef:[collection queryWhereField:@"zip" in:@[ @98101, @98103 ]]];
+  XCTAssertEqualObjects(FIRQuerySnapshotGetData(snapshot), (@[ testDocs[@"a"], testDocs[@"c"] ]));
+
+  // With objects
+  snapshot = [self readDocumentSetForRef:[collection queryWhereField:@"zip"
+                                                                  in:@[ @{@"code" : @500} ]]];
+  XCTAssertEqualObjects(FIRQuerySnapshotGetData(snapshot), (@[ testDocs[@"f"] ]));
+}
+
+- (void)testQueriesCanUseInFiltersWithDocIds {
+  // TODO(b/138855186): Re-enable in prod once feature lands in backend.
+  if (![FSTIntegrationTestCase isRunningAgainstEmulator]) return;
+
+  NSDictionary *testDocs = @{
+    @"aa" : @{@"key" : @"aa"},
+    @"ab" : @{@"key" : @"ab"},
+    @"ba" : @{@"key" : @"ba"},
+    @"bb" : @{@"key" : @"bb"},
+  };
+  FIRCollectionReference *collection = [self collectionRefWithDocuments:testDocs];
+
+  FIRQuerySnapshot *snapshot =
+      [self readDocumentSetForRef:[collection queryWhereFieldPath:[FIRFieldPath documentID]
+                                                               in:@[ @"aa", @"ab" ]]];
+  XCTAssertEqualObjects(FIRQuerySnapshotGetData(snapshot), (@[ testDocs[@"aa"], testDocs[@"ab"] ]));
+}
+
+- (void)testQueriesCanUseArrayContainsAnyFilters {
+  // TODO(b/138855186): Re-enable in prod once feature lands in backend.
+  if (![FSTIntegrationTestCase isRunningAgainstEmulator]) return;
+
+  NSDictionary *testDocs = @{
+    @"a" : @{@"array" : @[ @42 ]},
+    @"b" : @{@"array" : @[ @"a", @42, @"c" ]},
+    @"c" : @{@"array" : @[ @41.999, @"42", @{@"a" : @[ @42 ]} ]},
+    @"d" : @{@"array" : @[ @42 ], @"array2" : @[ @"bingo" ]},
+    @"e" : @{@"array" : @[ @43 ]},
+    @"f" : @{@"array" : @[ @{@"a" : @42} ]},
+    @"g" : @{@"array" : @42},
+  };
+  FIRCollectionReference *collection = [self collectionRefWithDocuments:testDocs];
+
+  // Search for zips matching [42, 43].
+  FIRQuerySnapshot *snapshot = [self
+      readDocumentSetForRef:[collection queryWhereField:@"array" arrayContainsAny:@[ @42, @43 ]]];
+  XCTAssertEqualObjects(FIRQuerySnapshotGetData(snapshot),
+                        (@[ testDocs[@"a"], testDocs[@"b"], testDocs[@"d"], testDocs[@"e"] ]));
+
+  // With objects.
+  snapshot = [self readDocumentSetForRef:[collection queryWhereField:@"array"
+                                                    arrayContainsAny:@[ @{@"a" : @42} ]]];
+  XCTAssertEqualObjects(FIRQuerySnapshotGetData(snapshot), (@[
+                          testDocs[@"f"],
+                        ]));
+}
+
+- (void)testCollectionGroupQueries {
+  // Use .document() to get a random collection group name to use but ensure it starts with 'b'
+  // for predictable ordering.
+  NSString *collectionGroup = [NSString
+      stringWithFormat:@"b%@", [[self.db collectionWithPath:@"foo"] documentWithAutoID].documentID];
+
+  NSArray *docPaths = @[
+    @"abc/123/${collectionGroup}/cg-doc1", @"abc/123/${collectionGroup}/cg-doc2",
+    @"${collectionGroup}/cg-doc3", @"${collectionGroup}/cg-doc4",
+    @"def/456/${collectionGroup}/cg-doc5", @"${collectionGroup}/virtual-doc/nested-coll/not-cg-doc",
+    @"x${collectionGroup}/not-cg-doc", @"${collectionGroup}x/not-cg-doc",
+    @"abc/123/${collectionGroup}x/not-cg-doc", @"abc/123/x${collectionGroup}/not-cg-doc",
+    @"abc/${collectionGroup}"
+  ];
+
+  FIRWriteBatch *batch = [self.db batch];
+  for (NSString *docPath in docPaths) {
+    NSString *path = [docPath stringByReplacingOccurrencesOfString:@"${collectionGroup}"
+                                                        withString:collectionGroup];
+    [batch setData:@{@"x" : @1} forDocument:[self.db documentWithPath:path]];
+  }
+  XCTestExpectation *expectation = [self expectationWithDescription:@"batch written"];
+  [batch commitWithCompletion:^(NSError *error) {
+    XCTAssertNil(error);
+    [expectation fulfill];
+  }];
+  [self awaitExpectations];
+
+  FIRQuerySnapshot *querySnapshot =
+      [self readDocumentSetForRef:[self.db collectionGroupWithID:collectionGroup]];
+  NSArray<NSString *> *ids = FIRQuerySnapshotGetIDs(querySnapshot);
+  XCTAssertEqualObjects(ids, (@[ @"cg-doc1", @"cg-doc2", @"cg-doc3", @"cg-doc4", @"cg-doc5" ]));
+}
+
+- (void)testCollectionGroupQueriesWithStartAtEndAtWithArbitraryDocumentIDs {
+  // Use .document() to get a random collection group name to use but ensure it starts with 'b'
+  // for predictable ordering.
+  NSString *collectionGroup = [NSString
+      stringWithFormat:@"b%@", [[self.db collectionWithPath:@"foo"] documentWithAutoID].documentID];
+
+  NSArray *docPaths = @[
+    @"a/a/${collectionGroup}/cg-doc1", @"a/b/a/b/${collectionGroup}/cg-doc2",
+    @"a/b/${collectionGroup}/cg-doc3", @"a/b/c/d/${collectionGroup}/cg-doc4",
+    @"a/c/${collectionGroup}/cg-doc5", @"${collectionGroup}/cg-doc6", @"a/b/nope/nope"
+  ];
+
+  FIRWriteBatch *batch = [self.db batch];
+  for (NSString *docPath in docPaths) {
+    NSString *path = [docPath stringByReplacingOccurrencesOfString:@"${collectionGroup}"
+                                                        withString:collectionGroup];
+    [batch setData:@{@"x" : @1} forDocument:[self.db documentWithPath:path]];
+  }
+  XCTestExpectation *expectation = [self expectationWithDescription:@"batch written"];
+  [batch commitWithCompletion:^(NSError *error) {
+    XCTAssertNil(error);
+    [expectation fulfill];
+  }];
+  [self awaitExpectations];
+
+  FIRQuerySnapshot *querySnapshot = [self
+      readDocumentSetForRef:[[[[self.db collectionGroupWithID:collectionGroup]
+                                queryOrderedByFieldPath:[FIRFieldPath documentID]]
+                                queryStartingAfterValues:@[ @"a/b" ]]
+                                queryEndingBeforeValues:@[
+                                  [NSString stringWithFormat:@"a/b/%@/cg-doc3", collectionGroup]
+                                ]]];
+
+  NSArray<NSString *> *ids = FIRQuerySnapshotGetIDs(querySnapshot);
+  XCTAssertEqualObjects(ids, (@[ @"cg-doc2" ]));
+}
+
+- (void)testCollectionGroupQueriesWithWhereFiltersOnArbitraryDocumentIDs {
+  // Use .document() to get a random collection group name to use but ensure it starts with 'b'
+  // for predictable ordering.
+  NSString *collectionGroup = [NSString
+      stringWithFormat:@"b%@", [[self.db collectionWithPath:@"foo"] documentWithAutoID].documentID];
+
+  NSArray *docPaths = @[
+    @"a/a/${collectionGroup}/cg-doc1", @"a/b/a/b/${collectionGroup}/cg-doc2",
+    @"a/b/${collectionGroup}/cg-doc3", @"a/b/c/d/${collectionGroup}/cg-doc4",
+    @"a/c/${collectionGroup}/cg-doc5", @"${collectionGroup}/cg-doc6", @"a/b/nope/nope"
+  ];
+
+  FIRWriteBatch *batch = [self.db batch];
+  for (NSString *docPath in docPaths) {
+    NSString *path = [docPath stringByReplacingOccurrencesOfString:@"${collectionGroup}"
+                                                        withString:collectionGroup];
+    [batch setData:@{@"x" : @1} forDocument:[self.db documentWithPath:path]];
+  }
+  XCTestExpectation *expectation = [self expectationWithDescription:@"batch written"];
+  [batch commitWithCompletion:^(NSError *error) {
+    XCTAssertNil(error);
+    [expectation fulfill];
+  }];
+  [self awaitExpectations];
+
+  FIRQuerySnapshot *querySnapshot = [self
+      readDocumentSetForRef:[[[self.db collectionGroupWithID:collectionGroup]
+                                   queryWhereFieldPath:[FIRFieldPath documentID]
+                                isGreaterThanOrEqualTo:@"a/b"]
+                                queryWhereFieldPath:[FIRFieldPath documentID]
+                                         isLessThan:[NSString stringWithFormat:@"a/b/%@/cg-doc3",
+                                                                               collectionGroup]]];
+
+  NSArray<NSString *> *ids = FIRQuerySnapshotGetIDs(querySnapshot);
+  XCTAssertEqualObjects(ids, (@[ @"cg-doc2" ]));
 }
 
 @end

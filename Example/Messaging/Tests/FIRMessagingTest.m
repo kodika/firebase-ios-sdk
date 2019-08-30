@@ -21,15 +21,15 @@
 #import <FirebaseCore/FIRAppInternal.h>
 #import <FirebaseInstanceID/FirebaseInstanceID.h>
 #import <FirebaseAnalyticsInterop/FIRAnalyticsInterop.h>
+#import <FirebaseMessaging/FIRMessaging.h>
 
-#import "FIRMessaging.h"
-#import "FIRMessaging_Private.h"
-#import "FIRMessagingTestUtilities.h"
+#import "Example/Messaging/Tests/FIRMessagingTestUtilities.h"
+#import "Firebase/Messaging/FIRMessaging_Private.h"
 
 extern NSString *const kFIRMessagingFCMTokenFetchAPNSOption;
 
 /// The NSUserDefaults domain for testing.
-NSString *const kFIRMessagingDefaultsTestDomain = @"com.messaging.tests";
+static NSString *const kFIRMessagingDefaultsTestDomain = @"com.messaging.tests";
 
 @interface FIRMessaging ()
 
@@ -61,7 +61,6 @@ NSString *const kFIRMessagingDefaultsTestDomain = @"com.messaging.tests";
   NSUserDefaults *defaults =
       [[NSUserDefaults alloc] initWithSuiteName:kFIRMessagingDefaultsTestDomain];
   _messaging = [FIRMessagingTestUtilities messagingForTestsWithUserDefaults:defaults];
-
   _mockFirebaseApp = OCMClassMock([FIRApp class]);
    OCMStub([_mockFirebaseApp defaultApp]).andReturn(_mockFirebaseApp);
   _mockInstanceID = OCMPartialMock(self.messaging.instanceID);
@@ -132,6 +131,7 @@ NSString *const kFIRMessagingDefaultsTestDomain = @"com.messaging.tests";
 
 #pragma mark - Direct Channel Establishment Testing
 
+#if TARGET_OS_IOS || TARGET_OS_TV
 // Should connect with valid token and application in foreground
 - (void)testDoesAutomaticallyConnectIfTokenAvailableAndForegrounded {
   // Disable actually attempting a connection
@@ -184,6 +184,7 @@ NSString *const kFIRMessagingDefaultsTestDomain = @"com.messaging.tests";
   BOOL shouldBeConnected = [_mockMessaging shouldBeConnectedAutomatically];
   XCTAssertFalse(shouldBeConnected);
 }
+#endif
 
 #pragma mark - FCM Token Fetching and Deleting
 

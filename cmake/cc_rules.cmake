@@ -24,13 +24,17 @@ include(CMakeParseArguments)
 # Defines a new library target with the given target name, sources, and
 # dependencies.
 function(cc_library name)
-  set(flag EXCLUDE_FROM_ALL)
+  set(flag EXCLUDE_FROM_ALL HEADER_ONLY)
   set(multi DEPENDS SOURCES)
   cmake_parse_arguments(ccl "${flag}" "" "${multi}" ${ARGN})
 
+  if(ccl_HEADER_ONLY)
+    generate_dummy_source(${name} ccl_SOURCES)
+  endif()
+
   maybe_remove_objc_sources(sources ${ccl_SOURCES})
   add_library(${name} ${sources})
-  add_objc_flags(${name} ccl)
+  add_objc_flags(${name} ${sources})
   target_include_directories(
     ${name}
     PUBLIC
@@ -107,11 +111,11 @@ function(cc_binary name)
 
   maybe_remove_objc_sources(sources ${ccb_SOURCES})
   add_executable(${name} ${sources})
-  add_objc_flags(${name} ccb)
-  add_test(${name} ${name})
+  add_objc_flags(${name} ${sources})
 
-  target_include_directories(${name} PUBLIC ${FIREBASE_SOURCE_DIR})
-  target_link_libraries(${name} ${ccb_DEPENDS})
+  target_compile_options(${name} PRIVATE ${FIREBASE_CXX_FLAGS})
+  target_include_directories(${name} PRIVATE ${FIREBASE_SOURCE_DIR})
+  target_link_libraries(${name} PRIVATE ${ccb_DEPENDS})
 
   if(ccb_EXCLUDE_FROM_ALL)
     set_property(
@@ -137,11 +141,12 @@ function(cc_test name)
 
   maybe_remove_objc_sources(sources ${cct_SOURCES})
   add_executable(${name} ${sources})
-  add_objc_flags(${name} cct)
+  add_objc_flags(${name} ${sources})
   add_test(${name} ${name})
 
-  target_include_directories(${name} PUBLIC ${FIREBASE_SOURCE_DIR})
-  target_link_libraries(${name} ${cct_DEPENDS})
+  target_compile_options(${name} PRIVATE ${FIREBASE_CXX_FLAGS})
+  target_include_directories(${name} PRIVATE ${FIREBASE_SOURCE_DIR})
+  target_link_libraries(${name} PRIVATE ${cct_DEPENDS})
 endfunction()
 
 # cc_fuzz_test(
@@ -214,7 +219,7 @@ endfunction()
 # add_objc_flags(target sources...)
 #
 # Adds OBJC_FLAGS to the compile options of the given target if any of the
-# sources have filenames that indicate they are are Objective-C.
+# sources have filenames that indicate they are Objective-C.
 function(add_objc_flags target)
   set(_has_objc OFF)
 
@@ -231,6 +236,12 @@ function(add_objc_flags target)
       PRIVATE
       ${OBJC_FLAGS}
     )
+
+    target_link_libraries(
+      ${target}
+      PRIVATE
+      "-framework Foundation"
+    )
   endif()
 endfunction()
 
@@ -245,3 +256,97 @@ function(add_alias ALIAS_TARGET ACTUAL_TARGET)
     add_library(${ALIAS_TARGET} ALIAS ${ACTUAL_TARGET})
   endif()
 endfunction()
+
+# objc_framework(
+#   target
+#   HEADERS headers...
+#   SOURCES sources...
+#   INCLUDES inlude_directories...
+#   DEFINES macros...
+#   DEPENDS libraries...
+#   [EXCLUDE_FROM_ALL]
+# )
+#
+# Defines a new framework target with the given target name and parameters.
+#
+# If SOURCES is not included, a dummy file will be generated.
+function(objc_framework target)
+  if(APPLE)
+    set(flag EXCLUDE_FROM_ALL)
+    set(single VERSION)
+    set(multi DEPENDS DEFINES HEADERS INCLUDES SOURCES)
+    cmake_parse_arguments(of "${flag}" "${single}" "${multi}" ${ARGN})
+
+    podspec_prep_headers(${target} ${of_HEADERS})
+
+    if (NOT cf_SOURCES)
+      generate_dummy_source(${target} of_SOURCES)
+    endif()
+
+    add_library(
+      ${target}
+      STATIC
+      ${of_SOURCES}
+    )
+
+    set_property(TARGET ${target} PROPERTY PUBLIC_HEADER ${of_HEADERS})
+    set_property(TARGET ${target} PROPERTY FRAMEWORK ON)
+    set_property(TARGET ${target} PROPERTY VERSION ${of_VERSION})
+
+    if(of_EXCLUDE_FROM_ALL)
+      set_property(
+        TARGET ${name}
+        PROPERTY EXCLUDE_FROM_ALL ON
+      )
+    endif()
+
+    target_compile_definitions(
+      ${target}
+      PUBLIC
+        ${of_DEFINES}
+    )
+
+    target_compile_options(
+      ${target}
+      INTERFACE
+        -F${CMAKE_CURRENT_BINARY_DIR}
+      PRIVATE
+        ${OBJC_FLAGS}
+        -fno-autolink
+        -Wno-unused-parameter
+    )
+
+    target_include_directories(
+      ${target}
+      PUBLIC ${PROJECT_BINARY_DIR}/Headers
+      PRIVATE ${of_INCLUDES}
+    )
+
+    target_link_libraries(
+      ${target} PUBLIC
+      ${of_DEPENDS}
+    )
+  endif()
+endfunction()
+
+# generate_dummy_source(name, sources_list)
+#
+# Generates a dummy source file containing a single symbol, suitable for use as
+# a source file in when defining a header-only library.
+#
+# Appends the generated source file name to the list named by sources_list.
+macro(generate_dummy_source name sources_list)
+  set(__empty_header_only_file "${CMAKE_CURRENT_BINARY_DIR}/${name}_header_only_empty.c")
+
+  if(NOT EXISTS ${__empty_header_only_file})
+    file(WRITE ${__empty_header_only_file}
+      "// Generated file that keeps header-only CMake libraries happy.
+
+      // single meaningless symbol
+      void ${name}_header_only_fakesym(void) {}
+      "
+    )
+  endif()
+
+  list(APPEND ${sources_list} ${__empty_header_only_file})
+endmacro()

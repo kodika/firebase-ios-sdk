@@ -24,17 +24,12 @@
 
 #import "Firestore/Source/API/FIRDocumentReference+Internal.h"
 #import "Firestore/Source/API/FSTUserDataConverter.h"
-#import "Firestore/Source/Core/FSTFirestoreClient.h"
-#import "Firestore/Source/Core/FSTQuery.h"
-#import "Firestore/Source/Local/FSTQueryData.h"
-#import "Firestore/Source/Model/FSTFieldValue.h"
-#import "Firestore/Source/Model/FSTMutation.h"
-#import "Firestore/Source/Model/FSTMutationBatch.h"
 
 #import "Firestore/Example/Tests/Util/FSTIntegrationTestCase.h"
 
 #include "Firestore/core/src/firebase/firestore/auth/empty_credentials_provider.h"
 #include "Firestore/core/src/firebase/firestore/core/database_info.h"
+#include "Firestore/core/src/firebase/firestore/local/query_data.h"
 #include "Firestore/core/src/firebase/firestore/model/database_id.h"
 #include "Firestore/core/src/firebase/firestore/model/document_key.h"
 #include "Firestore/core/src/firebase/firestore/model/precondition.h"
@@ -46,15 +41,23 @@
 #include "Firestore/core/src/firebase/firestore/util/hard_assert.h"
 #include "Firestore/core/src/firebase/firestore/util/status.h"
 #include "Firestore/core/src/firebase/firestore/util/string_apple.h"
+#include "Firestore/core/test/firebase/firestore/testutil/testutil.h"
 #include "absl/memory/memory.h"
 
 namespace util = firebase::firestore::util;
+namespace testutil = firebase::firestore::testutil;
+
+using firebase::Timestamp;
 using firebase::firestore::auth::EmptyCredentialsProvider;
 using firebase::firestore::core::DatabaseInfo;
+using firebase::firestore::local::QueryData;
 using firebase::firestore::model::BatchId;
 using firebase::firestore::model::DatabaseId;
 using firebase::firestore::model::DocumentKey;
 using firebase::firestore::model::DocumentKeySet;
+using firebase::firestore::model::FieldValue;
+using firebase::firestore::model::MutationBatch;
+using firebase::firestore::model::MutationBatchResult;
 using firebase::firestore::model::Precondition;
 using firebase::firestore::model::OnlineState;
 using firebase::firestore::model::TargetId;
@@ -62,6 +65,8 @@ using firebase::firestore::remote::Datastore;
 using firebase::firestore::remote::GrpcConnection;
 using firebase::firestore::remote::RemoteEvent;
 using firebase::firestore::remote::RemoteStore;
+using firebase::firestore::testutil::Map;
+using firebase::firestore::testutil::WrapObject;
 using firebase::firestore::util::AsyncQueue;
 using firebase::firestore::util::ExecutorLibdispatch;
 using firebase::firestore::util::Status;
@@ -80,18 +85,17 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)expectListenEventWithDescription:(NSString *)description;
 
 @property(nonatomic, weak, nullable) XCTestCase *testCase;
-@property(nonatomic, strong) NSMutableArray<NSObject *> *writeEvents;
 @property(nonatomic, strong) NSMutableArray<XCTestExpectation *> *writeEventExpectations;
 @property(nonatomic, strong) NSMutableArray<XCTestExpectation *> *listenEventExpectations;
 @end
 
 @implementation FSTRemoteStoreEventCapture {
   std::vector<RemoteEvent> _listenEvents;
+  std::vector<MutationBatchResult> _writeEvents;
 }
 
 - (instancetype)initWithTestCase:(XCTestCase *_Nullable)testCase {
   if (self = [super init]) {
-    _writeEvents = [NSMutableArray array];
     _testCase = testCase;
     _writeEventExpectations = [NSMutableArray array];
     _listenEventExpectations = [NSMutableArray array];
@@ -121,8 +125,8 @@ NS_ASSUME_NONNULL_BEGIN
                                                                     description]]];
 }
 
-- (void)applySuccessfulWriteWithResult:(FSTMutationBatchResult *)batchResult {
-  [self.writeEvents addObject:batchResult];
+- (void)applySuccessfulWriteWithResult:(const MutationBatchResult &)batchResult {
+  _writeEvents.push_back(batchResult);
   XCTestExpectation *expectation = [self.writeEventExpectations objectAtIndex:0];
   [self.writeEventExpectations removeObjectAtIndex:0];
   [expectation fulfill];
@@ -156,9 +160,8 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 @implementation FSTDatastoreTests {
-  std::unique_ptr<AsyncQueue> _testWorkerQueue;
+  std::shared_ptr<AsyncQueue> _testWorkerQueue;
   FSTLocalStore *_localStore;
-  EmptyCredentialsProvider _credentials;
 
   DatabaseInfo _databaseInfo;
   std::shared_ptr<Datastore> _datastore;
@@ -174,18 +177,19 @@ NS_ASSUME_NONNULL_BEGIN
     GrpcConnection::UseInsecureChannel(util::MakeString(settings.host));
   }
 
-  DatabaseId database_id(util::MakeString(projectID), DatabaseId::kDefault);
+  DatabaseId database_id(util::MakeString(projectID));
 
   _databaseInfo =
       DatabaseInfo(database_id, "test-key", util::MakeString(settings.host), settings.sslEnabled);
 
   dispatch_queue_t queue = dispatch_queue_create(
       "com.google.firestore.FSTDatastoreTestsWorkerQueue", DISPATCH_QUEUE_SERIAL);
-  _testWorkerQueue = absl::make_unique<AsyncQueue>(absl::make_unique<ExecutorLibdispatch>(queue));
-  _datastore = std::make_shared<Datastore>(_databaseInfo, _testWorkerQueue.get(), &_credentials);
+  _testWorkerQueue = std::make_shared<AsyncQueue>(absl::make_unique<ExecutorLibdispatch>(queue));
+  _datastore = std::make_shared<Datastore>(_databaseInfo, _testWorkerQueue,
+                                           std::make_shared<EmptyCredentialsProvider>());
 
-  _remoteStore = absl::make_unique<RemoteStore>(_localStore, _datastore, _testWorkerQueue.get(),
-                                                [](OnlineState) {});
+  _remoteStore =
+      absl::make_unique<RemoteStore>(_localStore, _datastore, _testWorkerQueue, [](OnlineState) {});
 
   _testWorkerQueue->Enqueue([=] { _remoteStore->Start(); });
 }
@@ -218,10 +222,8 @@ NS_ASSUME_NONNULL_BEGIN
 
   _remoteStore->set_sync_engine(capture);
 
-  FSTSetMutation *mutation = [self setMutation];
-  FSTMutationBatch *batch = [[FSTMutationBatch alloc] initWithBatchID:23
-                                                       localWriteTime:[FIRTimestamp timestamp]
-                                                            mutations:{mutation}];
+  auto mutation = testutil::SetMutation("rooms/eros", Map("name", "Eros"));
+  MutationBatch batch = MutationBatch(23, Timestamp::Now(), {}, {mutation});
   _testWorkerQueue->Enqueue([=] {
     _remoteStore->AddToWritePipeline(batch);
     // The added batch won't be written immediately because write stream wasn't yet open --
@@ -239,14 +241,6 @@ NS_ASSUME_NONNULL_BEGIN
                                    XCTFail(@"Error waiting for timeout: %@", expectationError);
                                  }
                                }];
-}
-
-- (FSTSetMutation *)setMutation {
-  return [[FSTSetMutation alloc]
-       initWithKey:DocumentKey::FromPathString("rooms/eros")
-             value:[[FSTObjectValue alloc]
-                       initWithDictionary:@{@"name" : [FSTStringValue stringValue:@"Eros"]}]
-      precondition:Precondition::None()];
 }
 
 @end

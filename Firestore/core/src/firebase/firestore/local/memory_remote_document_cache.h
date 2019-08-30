@@ -30,9 +30,8 @@
 #include "Firestore/core/src/firebase/firestore/model/types.h"
 
 @class FSTLocalSerializer;
-@class FSTMaybeDocument;
 @class FSTMemoryLRUReferenceDelegate;
-@class FSTQuery;
+@class FSTMemoryPersistence;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -40,24 +39,33 @@ namespace firebase {
 namespace firestore {
 namespace local {
 
+class Sizer;
+
 class MemoryRemoteDocumentCache : public RemoteDocumentCache {
  public:
-  void Add(FSTMaybeDocument *document) override;
-  void Remove(const model::DocumentKey &key) override;
+  explicit MemoryRemoteDocumentCache(FSTMemoryPersistence* persistence);
 
-  FSTMaybeDocument *_Nullable Get(const model::DocumentKey &key) override;
-  model::MaybeDocumentMap GetAll(const model::DocumentKeySet &keys) override;
-  model::DocumentMap GetMatching(FSTQuery *query) override;
+  void Add(const model::MaybeDocument& document) override;
+  void Remove(const model::DocumentKey& key) override;
+
+  absl::optional<model::MaybeDocument> Get(
+      const model::DocumentKey& key) override;
+  model::OptionalMaybeDocumentMap GetAll(
+      const model::DocumentKeySet& keys) override;
+  model::DocumentMap GetMatching(const core::Query& query) override;
 
   std::vector<model::DocumentKey> RemoveOrphanedDocuments(
-      FSTMemoryLRUReferenceDelegate *reference_delegate,
+      FSTMemoryLRUReferenceDelegate* reference_delegate,
       model::ListenSequenceNumber upper_bound);
 
-  size_t CalculateByteSize(FSTLocalSerializer *serializer);
+  size_t CalculateByteSize(const Sizer& sizer);
 
  private:
   /** Underlying cache of documents. */
   model::MaybeDocumentMap docs_;
+
+  // This instance is owned by FSTMemoryPersistence; avoid a retain cycle.
+  __weak FSTMemoryPersistence* persistence_;
 };
 
 }  // namespace local

@@ -1,5 +1,94 @@
 # Unreleased
 
+# v1.5.0
+- [changed] Transactions now perform exponential backoff before retrying.
+  This means transactions on highly contended documents are more likely to
+  succeed.
+- [feature] Added a `waitForPendingWrites()` method to `FIRFirestore` class
+  which allows users to wait on a promise that resolves when all pending
+  writes are acknowledged by the Firestore backend.
+- [feature] Added a `terminate()` method to `FIRFirestore` which terminates
+  the instance, releasing any held resources. Once it completes, you can
+  optionally call `clearPersistence()` to wipe persisted Firestore data
+  from disk.
+
+# v1.4.5
+- [fixed] Fixed a crash that would happen when changing networks or going from
+  online to offline. (#3661).
+
+# v1.4.4
+- [changed] Internal improvements.
+
+# v1.4.3
+- [changed] Transactions are now more flexible. Some sequences of operations
+  that were previously incorrectly disallowed are now allowed. For example,
+  after reading a document that doesn't exist, you can now set it multiple
+  times successfully in a transaction.
+
+# v1.4.2
+- [fixed] Fixed an issue where query results were temporarily missing documents
+  that previously had not matched but had been updated to now match the query
+  (https://github.com/firebase/firebase-android-sdk/issues/155).
+- [fixed] Fixed an internal assertion that was triggered when an update
+  with a `FieldValue.serverTimestamp()` and an update with a
+  `FieldValue.increment()` were pending for the same document.
+- [fixed] Fixed the `oldIndex` and `newIndex` values in `DocumentChange` to
+  actually be `NSNotFound` when documents are added or removed, respectively
+  (#3298).
+- [changed] Failed transactions now return the failure from the last attempt,
+  instead of `ABORTED`.
+
+# v1.4.1
+- [fixed] Fixed certificate loading for non-CocoaPods builds that may not
+  include bundle identifiers in their frameworks or apps (#3184).
+
+# v1.4.0
+- [feature] Added `clearPersistence()`, which clears the persistent storage
+  including pending writes and cached documents. This is intended to help
+  write reliable tests (https://github.com/firebase/firebase-js-sdk/issues/449).
+
+# v1.3.2
+- [fixed] Firestore should now recover its connection to the server more
+  quickly after being on a network suffering from total packet loss (#2987).
+- [fixed] Changed gRPC-C++ dependency to 0.0.9 which adds support for using it
+  concurrently with the Objective-C gRPC CocoaPod. This fixes certificate
+  errors you might encounter when trying to use Firestore and other Google
+  Cloud Objective-C APIs in the same project.
+
+# v1.3.1
+- [fixed] Disabling garbage collection now avoids even scheduling the
+  collection process. This can be used to prevent crashes in the background when
+  using `NSFileProtectionComplete`. Note that Firestore does not support
+  operating in this mode--nearly all API calls will cause crashes while file
+  protection is enabled. This change just prevents a crash when Firestore is
+  idle (#2846).
+
+# v1.3.0
+- [feature] You can now query across all collections in your database with a
+  given collection ID using the `Firestore.collectionGroup()` method.
+- [feature] Added community support for tvOS.
+
+# v1.2.1
+- [fixed] Fixed a use-after-free bug that could be observed when using snapshot
+  listeners on temporary document references (#2682).
+
+# v1.2.0
+- [feature] Added community support for macOS (#434).
+- [fixed] Fixed the way gRPC certificates are loaded on macOS (#2604).
+
+# v1.1.0
+- [feature] Added `FieldValue.increment()`, which can be used in
+  `updateData(_:)` and `setData(_:merge:)` to increment or decrement numeric
+  field values safely without transactions.
+- [changed] Improved performance when querying over documents that contain
+  subcollections (#2466).
+- [changed] Prepared the persistence layer to support collection group queries.
+  While this feature is not yet available, all schema changes are included
+  in this release.
+
+# v1.0.2
+- [changed] Internal improvements.
+
 # v1.0.1
 - [changed] Internal improvements.
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google
+ * Copyright 2019 Google
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,9 +49,9 @@ static NSString *const kFacebookAppID = KFACEBOOK_APP_ID;
 
   [ApplicationDelegate setOpenURLDelegate:self];
   [FBSDKSettings setAppID:kFacebookAppID];
-  [_loginManager logInWithReadPermissions:@[ @"email" ]
-                       fromViewController:viewController
-                                  handler:^(FBSDKLoginManagerLoginResult *result, NSError *error) {
+  [_loginManager logInWithPermissions:@[ @"email" ]
+                   fromViewController:viewController
+                              handler:^(FBSDKLoginManagerLoginResult *result, NSError *error) {
     [ApplicationDelegate setOpenURLDelegate:nil];
     if (!error && result.isCancelled) {
       error = [NSError errorWithDomain:@"com.google.FirebaseAuthSample" code:-1 userInfo:nil];

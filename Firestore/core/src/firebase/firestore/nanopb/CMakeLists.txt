@@ -15,15 +15,17 @@
 cc_library(
   firebase_firestore_nanopb
   SOURCES
-    nanopb_string.cc
-    nanopb_string.h
-    reader.h
+    byte_string.cc
+    byte_string.h
+    nanopb_util.cc
+    nanopb_util.h
     reader.cc
-    writer.h
+    reader.h
     writer.cc
+    writer.h
   DEPENDS
     # TODO(b/111328563) Force nanopb first to work around ODR violations
-    protobuf-nanopb
+    protobuf-nanopb-static
 
     firebase_firestore_util
     firebase_firestore_protos_nanopb

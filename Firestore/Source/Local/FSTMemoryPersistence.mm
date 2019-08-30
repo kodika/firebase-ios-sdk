@@ -22,10 +22,14 @@
 #include <vector>
 
 #include "Firestore/core/src/firebase/firestore/auth/user.h"
+#include "Firestore/core/src/firebase/firestore/local/index_manager.h"
 #include "Firestore/core/src/firebase/firestore/local/listen_sequence.h"
+#include "Firestore/core/src/firebase/firestore/local/lru_garbage_collector.h"
+#include "Firestore/core/src/firebase/firestore/local/memory_index_manager.h"
 #include "Firestore/core/src/firebase/firestore/local/memory_mutation_queue.h"
 #include "Firestore/core/src/firebase/firestore/local/memory_query_cache.h"
 #include "Firestore/core/src/firebase/firestore/local/memory_remote_document_cache.h"
+#include "Firestore/core/src/firebase/firestore/local/proto_sizer.h"
 #include "Firestore/core/src/firebase/firestore/local/reference_set.h"
 #include "Firestore/core/src/firebase/firestore/model/document_key.h"
 #include "Firestore/core/src/firebase/firestore/util/hard_assert.h"
@@ -34,11 +38,16 @@
 using firebase::firestore::auth::HashUser;
 using firebase::firestore::auth::User;
 using firebase::firestore::local::ListenSequence;
+using firebase::firestore::local::LruGarbageCollector;
 using firebase::firestore::local::LruParams;
+using firebase::firestore::local::MemoryIndexManager;
 using firebase::firestore::local::MemoryMutationQueue;
 using firebase::firestore::local::MemoryQueryCache;
 using firebase::firestore::local::MemoryRemoteDocumentCache;
+using firebase::firestore::local::ProtoSizer;
+using firebase::firestore::local::QueryData;
 using firebase::firestore::local::ReferenceSet;
+using firebase::firestore::local::TargetCallback;
 using firebase::firestore::model::DocumentKey;
 using firebase::firestore::model::DocumentKeyHash;
 using firebase::firestore::model::ListenSequenceNumber;
@@ -54,6 +63,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (MemoryQueryCache *)queryCache;
 
 - (MemoryRemoteDocumentCache *)remoteDocumentCache;
+
+- (MemoryIndexManager *)indexManager;
 
 - (MemoryMutationQueue *)mutationQueueForUser:(const User &)user;
 
@@ -78,7 +89,9 @@ NS_ASSUME_NONNULL_BEGIN
   std::unique_ptr<MemoryQueryCache> _queryCache;
 
   /** The RemoteDocumentCache representing the persisted cache of remote documents. */
-  MemoryRemoteDocumentCache _remoteDocumentCache;
+  std::unique_ptr<MemoryRemoteDocumentCache> _remoteDocumentCache;
+
+  MemoryIndexManager _indexManager;
 
   FSTTransactionRunner _transactionRunner;
 
@@ -105,6 +118,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)init {
   if (self = [super init]) {
     _queryCache = absl::make_unique<MemoryQueryCache>(self);
+    _remoteDocumentCache = absl::make_unique<MemoryRemoteDocumentCache>(self);
     self.started = YES;
   }
   return self;
@@ -151,12 +165,17 @@ NS_ASSUME_NONNULL_BEGIN
 }
 
 - (MemoryRemoteDocumentCache *)remoteDocumentCache {
-  return &_remoteDocumentCache;
+  return _remoteDocumentCache.get();
+}
+
+- (MemoryIndexManager *)indexManager {
+  return &_indexManager;
 }
 
 @end
 
 @implementation FSTMemoryLRUReferenceDelegate {
+  local::LruDelegateBridge _delegateBridge;
   // This delegate should have the same lifetime as the persistence layer, but mark as
   // weak to avoid retain cycle.
   __weak FSTMemoryPersistence *_persistence;
@@ -164,7 +183,7 @@ NS_ASSUME_NONNULL_BEGIN
   // the leveldb implementation.
   std::unordered_map<DocumentKey, ListenSequenceNumber, DocumentKeyHash> _sequenceNumbers;
   ReferenceSet *_additionalReferences;
-  FSTLRUGarbageCollector *_gc;
+  std::unique_ptr<LruGarbageCollector> _gc;
   // PORTING NOTE: when this class is ported to C++, this does not need to be a pointer
   std::unique_ptr<ListenSequence> _listenSequence;
   ListenSequenceNumber _currentSequenceNumber;
@@ -176,8 +195,9 @@ NS_ASSUME_NONNULL_BEGIN
                           lruParams:(firebase::firestore::local::LruParams)lruParams {
   if (self = [super init]) {
     _persistence = persistence;
-    _gc = [[FSTLRUGarbageCollector alloc] initWithDelegate:self params:lruParams];
-    _currentSequenceNumber = kFSTListenSequenceNumberInvalid;
+    _delegateBridge = local::LruDelegateBridge(self);
+    _gc = absl::make_unique<LruGarbageCollector>(&_delegateBridge, lruParams);
+    _currentSequenceNumber = local::kListenSequenceNumberInvalid;
     // Theoretically this is always 0, since this is all in-memory...
     ListenSequenceNumber highestSequenceNumber =
         _persistence.queryCache->highest_listen_sequence_number();
@@ -187,12 +207,12 @@ NS_ASSUME_NONNULL_BEGIN
   return self;
 }
 
-- (FSTLRUGarbageCollector *)gc {
-  return _gc;
+- (local::LruGarbageCollector *)gc {
+  return _gc.get();
 }
 
 - (ListenSequenceNumber)currentSequenceNumber {
-  HARD_ASSERT(_currentSequenceNumber != kFSTListenSequenceNumberInvalid,
+  HARD_ASSERT(_currentSequenceNumber != local::kListenSequenceNumberInvalid,
               "Asking for a sequence number outside of a transaction");
   return _currentSequenceNumber;
 }
@@ -203,10 +223,9 @@ NS_ASSUME_NONNULL_BEGIN
   _additionalReferences = set;
 }
 
-- (void)removeTarget:(FSTQueryData *)queryData {
-  FSTQueryData *updated = [queryData queryDataByReplacingSnapshotVersion:queryData.snapshotVersion
-                                                             resumeToken:queryData.resumeToken
-                                                          sequenceNumber:_currentSequenceNumber];
+- (void)removeTarget:(const QueryData &)queryData {
+  QueryData updated = queryData.Copy(queryData.snapshot_version(), queryData.resume_token(),
+                                     _currentSequenceNumber);
   _persistence.queryCache->UpdateTarget(updated);
 }
 
@@ -219,37 +238,36 @@ NS_ASSUME_NONNULL_BEGIN
 }
 
 - (void)commitTransaction {
-  _currentSequenceNumber = kFSTListenSequenceNumberInvalid;
+  _currentSequenceNumber = local::kListenSequenceNumberInvalid;
 }
 
-- (void)enumerateTargetsUsingBlock:(void (^)(FSTQueryData *queryData, BOOL *stop))block {
-  return _persistence.queryCache->EnumerateTargets(block);
+- (void)enumerateTargetsUsingCallback:(const TargetCallback &)callback {
+  return _persistence.queryCache->EnumerateTargets(callback);
 }
 
-- (void)enumerateMutationsUsingBlock:
-    (void (^)(const DocumentKey &key, ListenSequenceNumber sequenceNumber, BOOL *stop))block {
-  BOOL stop = NO;
+- (void)enumerateMutationsUsingCallback:
+    (const firebase::firestore::local::OrphanedDocumentCallback &)callback {
   for (const auto &entry : _sequenceNumbers) {
     ListenSequenceNumber sequenceNumber = entry.second;
     const DocumentKey &key = entry.first;
     // Pass in the exact sequence number as the upper bound so we know it won't be pinned by being
     // too recent.
     if (![self isPinnedAtSequenceNumber:sequenceNumber document:key]) {
-      block(key, sequenceNumber, &stop);
+      callback(key, sequenceNumber);
     }
   }
 }
 
 - (int)removeTargetsThroughSequenceNumber:(ListenSequenceNumber)sequenceNumber
-                              liveQueries:(const std::unordered_map<TargetId, FSTQueryData *> &)
-                                              liveQueries {
+                              liveQueries:
+                                  (const std::unordered_map<TargetId, QueryData> &)liveQueries {
   return _persistence.queryCache->RemoveTargets(sequenceNumber, liveQueries);
 }
 
 - (size_t)sequenceNumberCount {
-  __block size_t totalCount = _persistence.queryCache->size();
-  [self enumerateMutationsUsingBlock:^(const DocumentKey &key, ListenSequenceNumber sequenceNumber,
-                                       BOOL *stop) {
+  size_t totalCount = _persistence.queryCache->size();
+  [self enumerateMutationsUsingCallback:[&totalCount](const DocumentKey &key,
+                                                      ListenSequenceNumber sequenceNumber) {
     totalCount++;
   }];
   return totalCount;
@@ -309,8 +327,9 @@ NS_ASSUME_NONNULL_BEGIN
   // used for testing. The algorithm here (loop through everything, serialize it
   // and count bytes) is inefficient and inexact, but won't run in production.
   size_t count = 0;
-  count += _persistence.queryCache->CalculateByteSize(_serializer);
-  count += _persistence.remoteDocumentCache->CalculateByteSize(_serializer);
+  ProtoSizer sizer(_serializer);
+  count += _persistence.queryCache->CalculateByteSize(sizer);
+  count += _persistence.remoteDocumentCache->CalculateByteSize(sizer);
   const MutationQueues &queues = [_persistence mutationQueues];
   for (const auto &entry : queues) {
     count += entry.second->CalculateByteSize(_serializer);
@@ -336,7 +355,7 @@ NS_ASSUME_NONNULL_BEGIN
 }
 
 - (ListenSequenceNumber)currentSequenceNumber {
-  return kFSTListenSequenceNumberInvalid;
+  return local::kListenSequenceNumberInvalid;
 }
 
 - (void)addInMemoryPins:(ReferenceSet *)set {
@@ -345,8 +364,9 @@ NS_ASSUME_NONNULL_BEGIN
   _additionalReferences = set;
 }
 
-- (void)removeTarget:(FSTQueryData *)queryData {
-  for (const DocumentKey &docKey : _persistence.queryCache->GetMatchingKeys(queryData.targetID)) {
+- (void)removeTarget:(const QueryData &)queryData {
+  for (const DocumentKey &docKey :
+       _persistence.queryCache->GetMatchingKeys(queryData.target_id())) {
     _orphaned->insert(docKey);
   }
   _persistence.queryCache->RemoveTarget(queryData);

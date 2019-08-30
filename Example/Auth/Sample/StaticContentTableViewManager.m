@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google
+ * Copyright 2019 Google
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,6 +52,18 @@ static NSString *const kValueCellReuseIdentitfier = @"reuseValueIdentifier";
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
   return _contents.sections[section].title;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView sectionForSectionIndexTitle:(NSString *)title atIndex:(NSInteger)index {
+  return index;
+}
+
+- (NSArray<NSString *> *)sectionIndexTitlesForTableView:(UITableView *)tableView {
+  NSMutableArray<NSString *> *sectionTitles = [NSMutableArray array];
+  for (StaticContentTableViewSection *section in _contents.sections) {
+    [sectionTitles addObject:[section.title substringToIndex:3]];
+  }
+  return sectionTitles;
 }
 
 #pragma mark - UITableViewDelegate

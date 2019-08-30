@@ -15,8 +15,9 @@
 #import "FIRTestCase.h"
 #import "FIRTestComponents.h"
 
-#import <FirebaseCore/FIRAnalyticsConfiguration+Internal.h>
+#import <FirebaseCore/FIRAnalyticsConfiguration.h>
 #import <FirebaseCore/FIRAppInternal.h>
+#import <FirebaseCore/FIRCoreDiagnosticsConnector.h>
 #import <FirebaseCore/FIROptionsInternal.h>
 
 NSString *const kFIRTestAppName1 = @"test_app_name_1";
@@ -50,6 +51,7 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
 
 @property(nonatomic) id appClassMock;
 @property(nonatomic) id observerMock;
+@property(nonatomic) id mockCoreDiagnosticsConnector;
 @property(nonatomic) NSNotificationCenter *notificationCenter;
 
 @end
@@ -62,6 +64,11 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
   [FIRApp resetApps];
   _appClassMock = OCMClassMock([FIRApp class]);
   _observerMock = OCMObserverMock();
+  _mockCoreDiagnosticsConnector = OCMClassMock([FIRCoreDiagnosticsConnector class]);
+
+  OCMStub(ClassMethod([self.mockCoreDiagnosticsConnector logCoreTelemetryWithOptions:[OCMArg any]]))
+      .andDo(^(NSInvocation *invocation){
+      });
 
   // TODO: Remove all usages of defaultCenter in Core, then we can instantiate an instance here to
   //       inject instead of using defaultCenter.
@@ -73,6 +80,7 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
   [_notificationCenter removeObserver:_observerMock];
   _observerMock = nil;
   _notificationCenter = nil;
+  _mockCoreDiagnosticsConnector = nil;
 
   [super tearDown];
 }
@@ -208,6 +216,8 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
 
 - (void)testValidName {
   XCTAssertNoThrow([FIRApp configureWithName:@"aA1_" options:[FIROptions defaultOptions]]);
+  XCTAssertNoThrow([FIRApp configureWithName:@"aA1-" options:[FIROptions defaultOptions]]);
+  XCTAssertNoThrow([FIRApp configureWithName:@"aAē1_" options:[FIROptions defaultOptions]]);
   XCTAssertThrows([FIRApp configureWithName:@"aA1%" options:[FIROptions defaultOptions]]);
   XCTAssertThrows([FIRApp configureWithName:@"aA1?" options:[FIROptions defaultOptions]]);
   XCTAssertThrows([FIRApp configureWithName:@"aA1!" options:[FIROptions defaultOptions]]);
@@ -258,13 +268,13 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
 }
 
 - (void)testErrorForSubspecConfigurationFailure {
-  NSError *error = [FIRApp errorForSubspecConfigurationFailureWithDomain:kFirebaseAdMobErrorDomain
-                                                               errorCode:FIRErrorCodeAdMobFailed
-                                                                 service:kFIRServiceAdMob
+  NSError *error = [FIRApp errorForSubspecConfigurationFailureWithDomain:kFirebaseCoreErrorDomain
+                                                               errorCode:-38
+                                                                 service:@"Auth"
                                                                   reason:@"some reason"];
   XCTAssertNotNil(error);
-  XCTAssert([error.domain isEqualToString:kFirebaseAdMobErrorDomain]);
-  XCTAssert(error.code == FIRErrorCodeAdMobFailed);
+  XCTAssert([error.domain isEqualToString:kFirebaseCoreErrorDomain]);
+  XCTAssert(error.code == -38);
   XCTAssert([error.description containsString:@"Configuration failed for"]);
 }
 
@@ -389,11 +399,11 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
   // Some direct tests of the validateAppIDFormat:withVersion: method.
   // Sanity checks first.
   NSString *const kGoodAppIDV1 = @"1:1337:ios:deadbeef";
-  NSString *const kGoodVersionV1 = @"1:";
+  NSString *const kGoodVersionV1 = @"1";
   XCTAssertTrue([FIRApp validateAppIDFormat:kGoodAppIDV1 withVersion:kGoodVersionV1]);
 
   NSString *const kGoodAppIDV2 = @"2:1337:ios:5e18052ab54fbfec";
-  NSString *const kGoodVersionV2 = @"2:";
+  NSString *const kGoodVersionV2 = @"2";
   XCTAssertTrue([FIRApp validateAppIDFormat:kGoodAppIDV2 withVersion:kGoodVersionV2]);
 
   // Version mismatch.
@@ -440,17 +450,12 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
   // Some direct tests of the validateAppIDFingerprint:withVersion: method.
   // Sanity checks first.
   NSString *const kGoodAppIDV1 = @"1:1337:ios:deadbeef";
-  NSString *const kGoodVersionV1 = @"1:";
+  NSString *const kGoodVersionV1 = @"1";
   XCTAssertTrue([FIRApp validateAppIDFingerprint:kGoodAppIDV1 withVersion:kGoodVersionV1]);
 
   NSString *const kGoodAppIDV2 = @"2:1337:ios:5e18052ab54fbfec";
-  NSString *const kGoodVersionV2 = @"2:";
+  NSString *const kGoodVersionV2 = @"2";
   XCTAssertTrue([FIRApp validateAppIDFormat:kGoodAppIDV2 withVersion:kGoodVersionV2]);
-
-  // Version mismatch.
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:kGoodAppIDV2 withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:kGoodAppIDV1 withVersion:kGoodVersionV2]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:kGoodAppIDV1 withVersion:@"999:"]);
 
   // Nil or empty strings.
   XCTAssertFalse([FIRApp validateAppIDFingerprint:kGoodAppIDV1 withVersion:nil]);
@@ -464,34 +469,18 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
   XCTAssertFalse([FIRApp validateAppIDFingerprint:kGoodVersionV1 withVersion:kGoodVersionV1]);
   // The version is the entire app ID.
   XCTAssertFalse([FIRApp validateAppIDFingerprint:kGoodAppIDV1 withVersion:kGoodAppIDV1]);
-
-  // Versions digits that may make a partial match.
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"01:1337:ios:deadbeef"
-                                      withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"10:1337:ios:deadbeef"
-                                      withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"11:1337:ios:deadbeef"
-                                      withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"21:1337:ios:5e18052ab54fbfec"
-                                      withVersion:kGoodVersionV2]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"22:1337:ios:5e18052ab54fbfec"
-                                      withVersion:kGoodVersionV2]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"02:1337:ios:5e18052ab54fbfec"
-                                      withVersion:kGoodVersionV2]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"20:1337:ios:5e18052ab54fbfec"
-                                      withVersion:kGoodVersionV2]);
-  // Extra fields.
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"ab:1:1337:ios:deadbeef"
-                                      withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"1:ab:1337:ios:deadbeef"
-                                      withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"1:1337:ab:ios:deadbeef"
-                                      withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"1:1337:ios:ab:deadbeef"
-                                      withVersion:kGoodVersionV1]);
-  XCTAssertFalse([FIRApp validateAppIDFingerprint:@"1:1337:ios:deadbeef:ab"
-                                      withVersion:kGoodVersionV1]);
 }
+
+// Uncomment if you need to measure performance of [FIRApp validateAppID:].
+// It is commented because measures are heavily dependent on a build agent configuration,
+// so it cannot produce reliable resault on CI
+//- (void)testAppIDFingerprintPerfomance {
+//  [self measureBlock:^{
+//    for (NSInteger i = 0; i < 100; ++i) {
+//      [self testAppIDPrefix];
+//    }
+//  }];
+//}
 
 #pragma mark - Automatic Data Collection Tests
 
@@ -651,9 +640,6 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
   // Ensure configure doesn't fire a notification.
   [FIRApp configure];
 
-  NSError *error = [NSError errorWithDomain:@"com.firebase" code:42 userInfo:nil];
-  [app sendLogsWithServiceName:@"Service" version:@"Version" error:error];
-
   // The observer mock is strict and will raise an exception when an unexpected notification is
   // received.
   OCMVerifyAll(self.observerMock);
@@ -672,7 +658,6 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
 
   id configurationMock = OCMClassMock([FIRAnalyticsConfiguration class]);
   OCMStub([configurationMock sharedInstance]).andReturn(configurationMock);
-  OCMStub([configurationMock setAnalyticsCollectionEnabled:OCMOCK_ANY persistSetting:OCMOCK_ANY]);
 
   // Ensure Analytics is set after the global flag is set. It needs to
   [defaultApp setDataCollectionDefaultEnabled:YES];
@@ -690,14 +675,15 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
 
   id configurationMock = OCMClassMock([FIRAnalyticsConfiguration class]);
   OCMStub([configurationMock sharedInstance]).andReturn(configurationMock);
-  OCMStub([configurationMock setAnalyticsCollectionEnabled:OCMOCK_ANY persistSetting:OCMOCK_ANY]);
 
   // Reject any changes to Analytics when the data collection changes.
+  OCMReject([configurationMock setAnalyticsCollectionEnabled:YES persistSetting:YES]);
+  OCMReject([configurationMock setAnalyticsCollectionEnabled:YES persistSetting:NO]);
   [app setDataCollectionDefaultEnabled:YES];
-  OCMReject([configurationMock setAnalyticsCollectionEnabled:OCMOCK_ANY persistSetting:OCMOCK_ANY]);
 
+  OCMReject([configurationMock setAnalyticsCollectionEnabled:NO persistSetting:YES]);
+  OCMReject([configurationMock setAnalyticsCollectionEnabled:NO persistSetting:NO]);
   [app setDataCollectionDefaultEnabled:NO];
-  OCMReject([configurationMock setAnalyticsCollectionEnabled:OCMOCK_ANY persistSetting:OCMOCK_ANY]);
 }
 
 #pragma mark - Internal Methods
@@ -749,6 +735,24 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
   XCTAssertFalse([[FIRApp firebaseUserAgent] containsString:@"InvalidLibrary`/1.0.0"]);
 }
 
+#pragma mark - Core Diagnostics
+
+- (void)testCoreDiagnosticsLoggedWhenFIRAppIsConfigured {
+  [self expectCoreDiagnosticsDataLogWithOptions:[self appOptions]];
+  [self createConfiguredAppWithName:NSStringFromSelector(_cmd)];
+  OCMVerifyAll(self.mockCoreDiagnosticsConnector);
+}
+
+- (void)testCoreDiagnosticsLoggedWhenAppDidBecomeActive {
+  FIRApp *app = [self createConfiguredAppWithName:NSStringFromSelector(_cmd)];
+  [self expectCoreDiagnosticsDataLogWithOptions:app.options];
+
+  [self.notificationCenter postNotificationName:[self appDidBecomeActiveNotificationName]
+                                         object:nil];
+
+  OCMVerifyAll(self.mockCoreDiagnosticsConnector);
+}
+
 #pragma mark - private
 
 - (void)expectNotificationForObserver:(id)observer
@@ -766,6 +770,41 @@ NSString *const kFIRTestAppName2 = @"test-app-name-2";
     kFIRAppIsDefaultAppKey : [NSNumber numberWithBool:isDefaultApp],
     kFIRGoogleAppIDKey : kGoogleAppID
   };
+}
+
+- (void)expectCoreDiagnosticsDataLogWithOptions:(nullable FIROptions *)expectedOptions {
+  [self.mockCoreDiagnosticsConnector stopMocking];
+  self.mockCoreDiagnosticsConnector = nil;
+  self.mockCoreDiagnosticsConnector = OCMClassMock([FIRCoreDiagnosticsConnector class]);
+
+  OCMExpect(ClassMethod([self.mockCoreDiagnosticsConnector
+      logCoreTelemetryWithOptions:[OCMArg checkWithBlock:^BOOL(FIROptions *options) {
+        if (!expectedOptions) {
+          return YES;
+        }
+        return [options.googleAppID isEqualToString:expectedOptions.googleAppID] &&
+               [options.GCMSenderID isEqualToString:expectedOptions.GCMSenderID];
+      }]]));
+}
+
+- (NSNotificationName)appDidBecomeActiveNotificationName {
+#if TARGET_OS_IOS || TARGET_OS_TV
+  return UIApplicationDidBecomeActiveNotification;
+#endif
+
+#if TARGET_OS_OSX
+  return NSApplicationDidBecomeActiveNotification;
+#endif
+}
+
+- (FIRApp *)createConfiguredAppWithName:(NSString *)name {
+  FIROptions *options = [self appOptions];
+  [FIRApp configureWithName:name options:options];
+  return [FIRApp appNamed:name];
+}
+
+- (FIROptions *)appOptions {
+  return [[FIROptions alloc] initWithGoogleAppID:kGoogleAppID GCMSenderID:kGCMSenderID];
 }
 
 @end

@@ -1,3 +1,19 @@
+# Unreleased
+
+# v6.1.0
+- [fixed] Fix Catalyst Build issue. (#3512)
+- [feature] The SDK adds support for the Firebase Database Emulator. To connect
+  to the emulator, specify "http://<emulator_host>/" as your Database URL
+  (via `Database.database(url:)`).
+  If you refer to your emulator host by IP rather than by domain name, you may
+  also need to specify a namespace ("http://<emulator_host>/?ns=<namespace>"). (#3491)
+
+# v6.0.0
+- [removed] Remove deprecated `childByAppendingPath` API. (#2763)
+
+# v5.1.1
+- [fixed] Fixed crash in FSRWebSocket. (#2485)
+
 # v5.0.2
 - [fixed] Fixed undefined behavior sanitizer issues. (#1443, #1444)
 

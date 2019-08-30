@@ -16,10 +16,28 @@
 
 cmake_minimum_required(VERSION 2.8.11)
 
+# Disallow mixing keyword and non-keyword forms of target_link_libraries
+if(POLICY CMP0023)
+  cmake_policy(SET CMP0023 NEW)
+endif()
+
 # Report AppleClang separately from Clang. Their version numbers are different.
 # https://cmake.org/cmake/help/v3.0/policy/CMP0025.html
 if(POLICY CMP0025)
   cmake_policy(SET CMP0025 NEW)
+endif()
+
+# Enable rpath by default
+if(POLICY CMP0042)
+  cmake_policy(SET CMP0042 NEW)
+endif()
+
+# Generate Ninja phony rules for unknown dependencies in the build tree and
+# don't complain about doing so. Our dependencies aren't good about declaring
+# BYPRODUCTS and we mix them all into a single uber build so we can't enable
+# this policy until all dependencies are capable of doing so.
+if(POLICY CMP0058)
+  cmake_policy(SET CMP0058 OLD)
 endif()
 
 # Defer enabling any languages.
@@ -166,16 +184,11 @@ endif()
 
 
 # LevelDB
-if(NOT WIN32)
-  set(HAVE_LEVELDB ON)
-endif()
-if(HAVE_LEVELDB)
-  set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "Firestore disabled")
-  set(LEVELDB_BUILD_BENCHMARKS OFF CACHE BOOL "Firestore disabled")
-  set(LEVELDB_INSTALL OFF CACHE BOOL "Firestore disabled")
-  add_external_subdirectory(leveldb)
-  add_alias(LevelDB::LevelDB leveldb)
-endif()
+set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "Firestore disabled")
+set(LEVELDB_BUILD_BENCHMARKS OFF CACHE BOOL "Firestore disabled")
+set(LEVELDB_INSTALL OFF CACHE BOOL "Firestore disabled")
+add_external_subdirectory(leveldb)
+add_alias(LevelDB::LevelDB leveldb)
 
 
 # nanopb
@@ -184,45 +197,24 @@ set(nanopb_MSVC_STATIC_RUNTIME OFF CACHE BOOL "Link static runtime libraries")
 add_external_subdirectory(nanopb)
 
 target_compile_definitions(
-  protobuf-nanopb
+  protobuf-nanopb-static
   PUBLIC -DPB_FIELD_32BIT -DPB_ENABLE_MALLOC
 )
 
+# Enable #include <nanopb/pb.h>
 target_include_directories(
-  protobuf-nanopb
-  INTERFACE $<BUILD_INTERFACE:${FIREBASE_EXTERNAL_SOURCE_DIR}/nanopb>
+  protobuf-nanopb-static
+  INTERFACE
+  $<BUILD_INTERFACE:${FIREBASE_EXTERNAL_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${FIREBASE_EXTERNAL_SOURCE_DIR}/nanopb>
 )
 
 
 enable_testing()
 include(compiler_setup)
 
-
-# Firebase packages
-podspec_framework(
-  ${FIREBASE_SOURCE_DIR}/GoogleUtilities.podspec
-  SPECS Logger
-)
-
-podspec_framework(${FIREBASE_SOURCE_DIR}/FirebaseCore.podspec)
-
-podspec_framework(${FIREBASE_SOURCE_DIR}/FirebaseAuthInterop.podspec)
-
-if(APPLE)
-  # FirebaseAuthInterop has no source files but CMake can't build frameworks
-  # that don't have sources. Generate an inconsequential source file so that
-  # the library can be linked.
-  file(
-    WRITE ${CMAKE_CURRENT_BINARY_DIR}/FirebaseAuthInteropDummy.c
-    "// generated file for header-only CMake support.
-    __attribute__((unused))
-    static void FirebaseAuthInteropFakeSymbol() {}
-    "
-  )
-  target_sources(
-    FirebaseAuthInterop
-    PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/FirebaseAuthInteropDummy.c
-  )
-endif()
-
+add_subdirectory(Firebase/Core)
 add_subdirectory(Firestore)
+add_subdirectory(GoogleUtilities)
+add_subdirectory(Interop/Auth)
+add_subdirectory(Interop/CoreDiagnostics)

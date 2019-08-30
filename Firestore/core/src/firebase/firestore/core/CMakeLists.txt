@@ -15,19 +15,45 @@
 cc_library(
   firebase_firestore_core
   SOURCES
+    array_contains_any_filter.cc
+    array_contains_any_filter.h
+    array_contains_filter.cc
+    array_contains_filter.h
+    bound.cc
+    bound.h
     database_info.cc
     database_info.h
+    direction.cc
+    direction.h
+    field_filter.cc
+    field_filter.h
     filter.cc
     filter.h
-    target_id_generator.cc
-    target_id_generator.h
+    in_filter.cc
+    in_filter.h
+    key_field_in_filter.cc
+    key_field_in_filter.h
+    key_field_filter.cc
+    key_field_filter.h
+    listen_options.h
+    operator.h
+    order_by.cc
+    order_by.h
     query.cc
     query.h
-    relation_filter.cc
-    relation_filter.h
+    query_listener.cc
+    query_listener.h
+    target_id_generator.cc
+    target_id_generator.h
+    user_data.cc
     user_data.h
-    user_data.mm
+    view.cc
+    view.h
+    view_snapshot.cc
+    view_snapshot.h
   DEPENDS
     absl_strings
     firebase_firestore_model
+    firebase_firestore_objc
+    firebase_firestore_remote
 )

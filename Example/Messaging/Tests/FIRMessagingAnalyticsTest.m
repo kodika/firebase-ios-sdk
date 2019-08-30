@@ -17,10 +17,13 @@
 #import <OCMock/OCMock.h>
 #import <XCTest/XCTest.h>
 
-#import "FIRMessagingAnalytics.h"
 #import <FirebaseAnalyticsInterop/FIRInteropEventNames.h>
 #import <FirebaseAnalyticsInterop/FIRInteropParameterNames.h>
 
+#import "Firebase/Messaging/FIRMessagingAnalytics.h"
+
+// Analytics tracking is iOS only feature.
+#if TARGET_OS_IOS
 static NSString *const kFIRParameterLabel = @"label";
 static NSString *const kReengagementSource = @"Firebase";
 static NSString *const kReengagementMedium = @"notification";
@@ -84,17 +87,8 @@ static FakeAnalyticsLogEventHandler _userPropertyHandler;
                 clearEventParameters:(nonnull NSDictionary *)clearEventParameters {
 }
 
-- (nonnull NSArray<FIRAConditionalUserProperty *> *)
-conditionalUserProperties:(nonnull NSString *)origin
-propertyNamePrefix:(nonnull NSString *)propertyNamePrefix {
-  return @[];
-}
-
 - (NSInteger)maxUserProperties:(nonnull NSString *)origin {
   return -1;
-}
-
-- (void)setConditionalUserProperty:(nonnull FIRAConditionalUserProperty *)conditionalUserProperty {
 }
 
 - (void)checkLastNotificationForOrigin:(nonnull NSString *)origin
@@ -110,7 +104,19 @@ propertyNamePrefix:(nonnull NSString *)propertyNamePrefix {
 - (void)unregisterAnalyticsListenerWithOrigin:(nonnull NSString *)origin {
 }
 
+- (void)clearConditionalUserProperty:(nonnull NSString *)userPropertyName forOrigin:(nonnull NSString *)origin clearEventName:(nonnull NSString *)clearEventName clearEventParameters:(nonnull NSDictionary<NSString *,NSString *> *)clearEventParameters {
+}
 
+- (nonnull NSArray<NSDictionary<NSString *,NSString *> *> *)conditionalUserProperties:(nonnull NSString *)origin propertyNamePrefix:(nonnull NSString *)propertyNamePrefix {
+  return nil;
+}
+
+
+- (void)setConditionalUserProperty:(nonnull NSDictionary<NSString *,id> *)conditionalUserProperty {
+}
+
+- (void)getUserPropertiesWithCallback:(nonnull FIRAInteropUserPropertiesCallback)callback {
+}
 @end
 
 @interface FIRMessagingAnalytics (ExposedForTest)
@@ -147,6 +153,8 @@ withNotification:(NSDictionary *)notification
 }
 
 - (void)tearDown {
+  _eventHandler = nil;
+  _userPropertyHandler = nil;
   [self.logClassMock stopMocking];
   [super tearDown];
 }
@@ -407,6 +415,7 @@ withNotification:(NSDictionary *)notification
   [FIRMessagingAnalytics logUserPropertyForConversionTracking:notification toAnalytics:analytics];
 }
 
+
 - (void)testLogMessage {
   NSDictionary *notification = @{
                                  @"google.c.a.e" : @"1",
@@ -414,6 +423,7 @@ withNotification:(NSDictionary *)notification
   [FIRMessagingAnalytics logMessage:notification toAnalytics:nil];
   OCMVerify([self.logClassMock logEvent:OCMOCK_ANY withNotification:notification toAnalytics:nil]);
 }
+
 
 - (void)testLogOpenNotification {
   NSDictionary *notification = @{
@@ -428,3 +438,5 @@ withNotification:(NSDictionary *)notification
 }
 
 @end
+
+#endif

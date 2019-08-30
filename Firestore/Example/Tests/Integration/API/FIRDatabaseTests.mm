@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#import <FirebaseCore/FIRAppInternal.h>
 #import <FirebaseFirestore/FirebaseFirestore.h>
 
 #import <XCTest/XCTest.h>
@@ -21,7 +22,11 @@
 #import "Firestore/Example/Tests/Util/FSTEventAccumulator.h"
 #import "Firestore/Example/Tests/Util/FSTIntegrationTestCase.h"
 #import "Firestore/Source/API/FIRFirestore+Internal.h"
-#import "Firestore/Source/Core/FSTFirestoreClient.h"
+
+#include "Firestore/core/src/firebase/firestore/core/firestore_client.h"
+#include "Firestore/core/test/firebase/firestore/testutil/app_testing.h"
+
+namespace testutil = firebase::firestore::testutil;
 
 using firebase::firestore::util::TimerId;
 
@@ -1040,7 +1045,8 @@ using firebase::firestore::util::TimerId;
 
   [self writeDocumentRef:doc data:@{@"a.b" : @"old", @"c.d" : @"old"}];
 
-  [self updateDocumentRef:doc data:@{[[FIRFieldPath alloc] initWithFields:@[ @"a.b" ]] : @"new"}];
+  [self updateDocumentRef:doc
+                     data:@{(id)[[FIRFieldPath alloc] initWithFields:@[ @"a.b" ]] : @"new"}];
 
   XCTestExpectation *expectation = [self expectationWithDescription:@"testUpdateFieldsWithDots"];
 
@@ -1065,8 +1071,8 @@ using firebase::firestore::util::TimerId;
 
   [self updateDocumentRef:doc
                      data:@{
-                       @"a.b" : @"new",
-                       [[FIRFieldPath alloc] initWithFields:@[ @"c", @"d" ]] : @"new"
+                       (id) @"a.b" : @"new",
+                       (id)[[FIRFieldPath alloc] initWithFields:@[ @"c", @"d" ]] : @"new"
                      }];
 
   XCTestExpectation *expectation = [self expectationWithDescription:@"testUpdateNestedFields"];
@@ -1184,7 +1190,7 @@ using firebase::firestore::util::TimerId;
   FIRFirestore *firestore = doc.firestore;
 
   [self writeDocumentRef:doc data:@{@"foo" : @"bar"}];
-  [self queueForFirestore:firestore] -> RunScheduledOperationsUntil(TimerId::WriteStreamIdle);
+  [firestore workerQueue] -> RunScheduledOperationsUntil(TimerId::WriteStreamIdle);
   [self writeDocumentRef:doc data:@{@"foo" : @"bar"}];
 }
 
@@ -1193,7 +1199,7 @@ using firebase::firestore::util::TimerId;
   FIRFirestore *firestore = doc.firestore;
 
   [self readSnapshotForRef:[self documentRef] requireOnline:YES];
-  [self queueForFirestore:firestore] -> RunScheduledOperationsUntil(TimerId::ListenStreamIdle);
+  [firestore workerQueue] -> RunScheduledOperationsUntil(TimerId::ListenStreamIdle);
   [self readSnapshotForRef:[self documentRef] requireOnline:YES];
 }
 
@@ -1215,6 +1221,230 @@ using firebase::firestore::util::TimerId;
   [self awaitExpectations];
   [firestore
       enableNetworkWithCompletion:[self completionForExpectationWithName:@"Final enable network"]];
+  [self awaitExpectations];
+}
+
+- (void)testClientCallsAfterTerminationFail {
+  FIRDocumentReference *doc = [self documentRef];
+  FIRFirestore *firestore = doc.firestore;
+
+  [firestore enableNetworkWithCompletion:[self completionForExpectationWithName:@"Enable network"]];
+  [self awaitExpectations];
+  [firestore terminateWithCompletion:[self completionForExpectationWithName:@"Terminate"]];
+  [self awaitExpectations];
+
+  XCTAssertThrowsSpecific(
+      {
+        [firestore disableNetworkWithCompletion:^(NSError *error){
+        }];
+      },
+      NSException, @"The client has already been terminated.");
+}
+
+- (void)testMaintainsPersistenceAfterRestarting {
+  FIRDocumentReference *doc = [self documentRef];
+  FIRFirestore *firestore = doc.firestore;
+  FIRApp *app = firestore.app;
+  NSString *appName = app.name;
+  FIROptions *options = app.options;
+
+  NSDictionary<NSString *, id> *initialData = @{@"foo" : @"42"};
+  [self writeDocumentRef:doc data:initialData];
+
+  // -clearPersistence() requires Firestore to be terminated. Shutdown FIRApp and remove the
+  // firestore instance to emulate the way an end user would do this.
+  [self terminateFirestore:firestore];
+  [self.firestores removeObject:firestore];
+  [self deleteApp:app];
+
+  // We restart the app with the same name and options to check that the previous instance's
+  // persistent storage persists its data after restarting. Calling [self firestore] here would
+  // create a new instance of firestore, which defeats the purpose of this test.
+  [FIRApp configureWithName:appName options:options];
+  FIRApp *app2 = [FIRApp appNamed:appName];
+  FIRFirestore *firestore2 = [self firestoreWithApp:app2];
+  FIRDocumentReference *docRef2 = [firestore2 documentWithPath:doc.path];
+  FIRDocumentSnapshot *snap = [self readDocumentForRef:docRef2 source:FIRFirestoreSourceCache];
+  XCTAssertTrue(snap.exists);
+}
+
+- (void)testCanClearPersistenceAfterRestarting {
+  FIRDocumentReference *doc = [self documentRef];
+  FIRFirestore *firestore = doc.firestore;
+  FIRApp *app = firestore.app;
+  NSString *appName = app.name;
+  FIROptions *options = app.options;
+
+  NSDictionary<NSString *, id> *initialData = @{@"foo" : @"42"};
+  [self writeDocumentRef:doc data:initialData];
+
+  // -clearPersistence() requires Firestore to be terminated. Shutdown FIRApp and remove the
+  // firestore instance to emulate the way an end user would do this.
+  [self terminateFirestore:firestore];
+  [self.firestores removeObject:firestore];
+  [firestore
+      clearPersistenceWithCompletion:[self completionForExpectationWithName:@"Enable network"]];
+  [self awaitExpectations];
+  [self deleteApp:app];
+
+  // We restart the app with the same name and options to check that the previous instance's
+  // persistent storage is actually cleared after the restart. Calling [self firestore] here would
+  // create a new instance of firestore, which defeats the purpose of this test.
+  [FIRApp configureWithName:appName options:options];
+  FIRApp *app2 = [FIRApp appNamed:appName];
+  FIRFirestore *firestore2 = [self firestoreWithApp:app2];
+  FIRDocumentReference *docRef2 = [firestore2 documentWithPath:doc.path];
+  XCTestExpectation *expectation2 = [self expectationWithDescription:@"getData"];
+  [docRef2 getDocumentWithSource:FIRFirestoreSourceCache
+                      completion:^(FIRDocumentSnapshot *doc2, NSError *_Nullable error) {
+                        XCTAssertNotNil(error);
+                        XCTAssertEqualObjects(error.domain, FIRFirestoreErrorDomain);
+                        XCTAssertEqual(error.code, FIRFirestoreErrorCodeUnavailable);
+                        [expectation2 fulfill];
+                      }];
+  [self awaitExpectations];
+}
+
+- (void)testClearPersistenceWhileRunningFails {
+  FIRDocumentReference *doc = [self documentRef];
+  FIRFirestore *firestore = doc.firestore;
+
+  [self enableNetwork];
+  XCTestExpectation *expectation = [self expectationWithDescription:@"clearPersistence"];
+  [firestore clearPersistenceWithCompletion:^(NSError *_Nullable error) {
+    XCTAssertNotNil(error);
+    XCTAssertEqualObjects(error.domain, FIRFirestoreErrorDomain);
+    XCTAssertEqual(error.code, FIRFirestoreErrorCodeFailedPrecondition);
+    [expectation fulfill];
+  }];
+  [self awaitExpectations];
+}
+
+- (void)testRestartFirestoreLeadsToNewInstance {
+  FIRApp *app = testutil::AppForUnitTesting(util::MakeString([FSTIntegrationTestCase projectID]));
+  FIRFirestore *firestore = [FIRFirestore firestoreForApp:app];
+  FIRFirestore *sameInstance = [FIRFirestore firestoreForApp:app];
+  firestore.settings = [FSTIntegrationTestCase settings];
+
+  XCTAssertEqual(firestore, sameInstance);
+
+  NSDictionary<NSString *, id> *data =
+      @{@"owner" : @{@"name" : @"Jonny", @"email" : @"abc@xyz.com"}};
+  [self writeDocumentRef:[firestore documentWithPath:@"abc/123"] data:data];
+
+  [self terminateFirestore:firestore];
+
+  // Create a new instance, check it's a different instance.
+  FIRFirestore *newInstance = [FIRFirestore firestoreForApp:app];
+  newInstance.settings = [FSTIntegrationTestCase settings];
+  XCTAssertNotEqual(firestore, newInstance);
+
+  // New instance still functions.
+  FIRDocumentSnapshot *snapshot =
+      [self readDocumentForRef:[newInstance documentWithPath:@"abc/123"]];
+  XCTAssertTrue([data isEqualToDictionary:[snapshot data]]);
+}
+
+- (void)testAppDeleteLeadsToFirestoreTermination {
+  FIRApp *app = testutil::AppForUnitTesting(util::MakeString([FSTIntegrationTestCase projectID]));
+  FIRFirestore *firestore = [FIRFirestore firestoreForApp:app];
+  firestore.settings = [FSTIntegrationTestCase settings];
+  NSDictionary<NSString *, id> *data =
+      @{@"owner" : @{@"name" : @"Jonny", @"email" : @"abc@xyz.com"}};
+  [self writeDocumentRef:[firestore documentWithPath:@"abc/123"] data:data];
+
+  [self deleteApp:app];
+
+  XCTAssertTrue(firestore.wrapped->client()->is_terminated());
+}
+
+- (void)testTerminateCanBeCalledMultipleTimes {
+  FIRApp *app = testutil::AppForUnitTesting(util::MakeString([FSTIntegrationTestCase projectID]));
+  FIRFirestore *firestore = [FIRFirestore firestoreForApp:app];
+
+  [firestore terminateWithCompletion:[self completionForExpectationWithName:@"Terminate1"]];
+  [self awaitExpectations];
+  XCTAssertThrowsSpecific(
+      {
+        [firestore disableNetworkWithCompletion:^(NSError *error){
+        }];
+      },
+      NSException, @"The client has already been terminated.");
+
+  [firestore terminateWithCompletion:[self completionForExpectationWithName:@"Terminate2"]];
+  [self awaitExpectations];
+  XCTAssertThrowsSpecific(
+      {
+        [firestore enableNetworkWithCompletion:^(NSError *error){
+        }];
+      },
+      NSException, @"The client has already been terminated.");
+}
+
+- (void)testCanRemoveListenerAfterTermination {
+  FIRApp *app = testutil::AppForUnitTesting(util::MakeString([FSTIntegrationTestCase projectID]));
+  FIRFirestore *firestore = [FIRFirestore firestoreForApp:app];
+  firestore.settings = [FSTIntegrationTestCase settings];
+
+  FIRDocumentReference *doc = [[firestore collectionWithPath:@"rooms"] documentWithAutoID];
+  FSTEventAccumulator *accumulator = [FSTEventAccumulator accumulatorForTest:self];
+  [self writeDocumentRef:doc data:@{}];
+  id<FIRListenerRegistration> listenerRegistration =
+      [doc addSnapshotListener:[accumulator valueEventHandler]];
+  [accumulator awaitEventWithName:@"Snapshot"];
+
+  [firestore terminateWithCompletion:[self completionForExpectationWithName:@"terminate"]];
+  [self awaitExpectations];
+
+  // This should proceed without error.
+  [listenerRegistration remove];
+  // Multiple calls should proceed as well.
+  [listenerRegistration remove];
+}
+
+- (void)testWaitForPendingWritesCompletes {
+  FIRDocumentReference *doc = [self documentRef];
+  FIRFirestore *firestore = doc.firestore;
+
+  [self disableNetwork];
+
+  [doc setData:@{@"foo" : @"bar"}];
+  [firestore waitForPendingWritesWithCompletion:
+                 [self completionForExpectationWithName:@"Wait for pending writes"]];
+
+  [firestore enableNetworkWithCompletion:[self completionForExpectationWithName:@"Enable network"]];
+  [self awaitExpectations];
+}
+
+- (void)testWaitForPendingWritesFailsWhenUserChanges {
+  FIRFirestore *firestore = self.db;
+
+  [self disableNetwork];
+
+  // Writes to local to prevent immediate call to the completion of waitForPendingWrites.
+  NSDictionary<NSString *, id> *data =
+      @{@"owner" : @{@"name" : @"Andy", @"email" : @"abc@example.com"}};
+  [[self documentRef] setData:data];
+
+  XCTestExpectation *expectation = [self expectationWithDescription:@"waitForPendingWrites"];
+  [firestore waitForPendingWritesWithCompletion:^(NSError *_Nullable error) {
+    XCTAssertNotNil(error);
+    XCTAssertEqualObjects(error.domain, FIRFirestoreErrorDomain);
+    XCTAssertEqual(error.code, FIRFirestoreErrorCodeCancelled);
+    [expectation fulfill];
+  }];
+
+  [self triggerUserChangeWithUid:@"user-to-fail-pending-writes"];
+  [self awaitExpectations];
+}
+
+- (void)testWaitForPendingWritesCompletesWhenOfflineIfNoPending {
+  FIRFirestore *firestore = self.db;
+
+  [self disableNetwork];
+
+  [firestore waitForPendingWritesWithCompletion:
+                 [self completionForExpectationWithName:@"Wait for pending writes"]];
   [self awaitExpectations];
 }
 

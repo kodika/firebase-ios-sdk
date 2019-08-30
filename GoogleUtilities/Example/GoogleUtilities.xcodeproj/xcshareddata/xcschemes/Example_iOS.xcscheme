@@ -26,6 +26,7 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      codeCoverageEnabled = "YES"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
          <TestableReference
@@ -35,16 +36,6 @@
                BlueprintIdentifier = "6003F5AD195388D20070C39A"
                BuildableName = "Tests_iOS.xctest"
                BlueprintName = "Tests_iOS"
-               ReferencedContainer = "container:GoogleUtilities.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "7CBFAA7D205702AB00A65866"
-               BuildableName = "GoogleUtilities_IntegrationTests.xctest"
-               BlueprintName = "GoogleUtilities_IntegrationTests"
                ReferencedContainer = "container:GoogleUtilities.xcodeproj">
             </BuildableReference>
          </TestableReference>

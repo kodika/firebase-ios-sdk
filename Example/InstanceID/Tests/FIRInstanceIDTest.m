@@ -16,12 +16,16 @@
 
 #import <XCTest/XCTest.h>
 
+#import <FirebaseCore/FIRAppInternal.h>
+#import <FirebaseCore/FIROptionsInternal.h>
+#import <FirebaseInstanceID/FIRInstanceID_Private.h>
 #import <OCMock/OCMock.h>
-#import "Firebase/InstanceID/FIRInstanceID+Testing.h"
+
 #import "Firebase/InstanceID/FIRInstanceIDAuthService.h"
 #import "Firebase/InstanceID/FIRInstanceIDCheckinPreferences+Internal.h"
 #import "Firebase/InstanceID/FIRInstanceIDConstants.h"
 #import "Firebase/InstanceID/FIRInstanceIDKeyPair.h"
+#import "Firebase/InstanceID/FIRInstanceIDKeyPairStore.h"
 #import "Firebase/InstanceID/FIRInstanceIDTokenInfo.h"
 #import "Firebase/InstanceID/FIRInstanceIDTokenManager.h"
 #import "Firebase/InstanceID/FIRInstanceIDUtilities.h"
@@ -36,16 +40,30 @@ static FIRInstanceIDTokenInfo *sTokenInfo;
 // Faking checkin calls
 static NSString *const kDeviceAuthId = @"device-id";
 static NSString *const kSecretToken = @"secret-token";
-static NSString *const kDigest = @"com.google.digest";
 static NSString *const kVersionInfo = @"1.0";
+// FIRApp configuration.
+static NSString *const kGCMSenderID = @"correct_gcm_sender_id";
+static NSString *const kGoogleAppID = @"1:123:ios:123abc";
 
 @interface FIRInstanceID (ExposedForTest)
+
+@property(nonatomic, readwrite, strong) FIRInstanceIDTokenManager *tokenManager;
+@property(nonatomic, readwrite, strong) FIRInstanceIDKeyPairStore *keyPairStore;
+@property(nonatomic, readwrite, copy) NSString *fcmSenderID;
+
 - (NSInteger)retryIntervalToFetchDefaultToken;
 - (BOOL)isFCMAutoInitEnabled;
 - (void)didCompleteConfigure;
 - (NSString *)cachedTokenIfAvailable;
 - (void)deleteIdentityWithHandler:(FIRInstanceIDDeleteHandler)handler;
 + (FIRInstanceID *)instanceIDForTests;
+- (void)defaultTokenWithHandler:(FIRInstanceIDTokenHandler)handler;
+- (instancetype)initPrivately;
+- (void)start;
++ (int64_t)maxRetryCountForDefaultToken;
++ (int64_t)minIntervalForDefaultTokenRetry;
++ (int64_t)maxRetryIntervalForDefaultTokenInSeconds;
+
 @end
 
 @interface FIRInstanceIDTest : XCTestCase
@@ -67,7 +85,8 @@ static NSString *const kVersionInfo = @"1.0";
 
 - (void)setUp {
   [super setUp];
-  _instanceID = [FIRInstanceID instanceIDForTests];
+  _instanceID = [[FIRInstanceID alloc] initPrivately];
+  [_instanceID start];
   if (!sTokenInfo) {
     sTokenInfo = [[FIRInstanceIDTokenInfo alloc] initWithAuthorizedEntity:kAuthorizedEntity
                                                                     scope:kScope
@@ -93,7 +112,7 @@ static NSString *const kVersionInfo = @"1.0";
   self.mockAuthService = OCMClassMock([FIRInstanceIDAuthService class]);
 
   [[[self.mockAuthService stub] andDo:^(NSInvocation *invocation) {
-    [invocation setReturnValue:&_hasCheckinInfo];
+    [invocation setReturnValue:&self->_hasCheckinInfo];
   }] hasValidCheckinInfo];
 
   self.mockTokenManager = OCMClassMock([FIRInstanceIDTokenManager class]);
@@ -116,9 +135,23 @@ static NSString *const kVersionInfo = @"1.0";
  *  FIRInstanceID with an associated FIRInstanceIDTokenManager.
  */
 - (void)testSharedInstance {
+  // The shared instance should be `nil` before the app is configured.
+  XCTAssertNil([FIRInstanceID instanceID]);
+
+  // The shared instance relies on the default app being configured. Configure it.
+  FIROptions *options = [[FIROptions alloc] initWithGoogleAppID:kGoogleAppID
+                                                    GCMSenderID:kGCMSenderID];
+  [FIRApp configureWithName:kFIRDefaultAppName options:options];
   FIRInstanceID *instanceID = [FIRInstanceID instanceID];
   XCTAssertNotNil(instanceID);
   XCTAssertNotNil(instanceID.tokenManager);
+
+  // Ensure a second call returns the same instance as the first.
+  FIRInstanceID *secondInstanceID = [FIRInstanceID instanceID];
+  XCTAssertEqualObjects(instanceID, secondInstanceID);
+
+  // Reset the default app for the next test.
+  [FIRApp resetApps];
 }
 
 - (void)testFCMAutoInitEnabled {
@@ -136,7 +169,7 @@ static NSString *const kVersionInfo = @"1.0";
                        handler:[OCMArg any]];
 
   [self.mockInstanceID didCompleteConfigure];
-  OCMVerify([self.mockInstanceID fetchDefaultToken]);
+  OCMVerify([self.mockInstanceID defaultTokenWithHandler:nil]);
   XCTAssertEqualObjects([self.mockInstanceID token], kToken);
 }
 
@@ -151,7 +184,7 @@ static NSString *const kVersionInfo = @"1.0";
 
   [self.mockInstanceID didCompleteConfigure];
 
-  OCMVerify([self.mockInstanceID fetchDefaultToken]);
+  OCMVerify([self.mockInstanceID defaultTokenWithHandler:nil]);
 }
 
 - (void)testTokenIsDeletedAlongWithIdentity {
@@ -170,7 +203,7 @@ static NSString *const kVersionInfo = @"1.0";
 - (void)testTokenIsFetchedDuringIIDGeneration {
   XCTestExpectation *tokenExpectation = [self
       expectationWithDescription:@"Token is refreshed when getID is called to avoid IID conflict."];
-  NSError *error;
+  NSError *error = nil;
   [[[self.mockKeyPairStore stub] andReturn:kFakeIID] appIdentityWithError:[OCMArg setTo:error]];
 
   [self.mockInstanceID getIDWithHandler:^(NSString *identity, NSError *error) {
@@ -498,11 +531,10 @@ static NSString *const kVersionInfo = @"1.0";
       cachedTokenInfoWithAuthorizedEntity:kAuthorizedEntity
                                     scope:@"*"];
 
-  OCMExpect([self.mockInstanceID fetchDefaultToken]);
-  NSString *token = [self.mockInstanceID token];
-  XCTAssertNil(token);
+  OCMExpect([self.mockInstanceID defaultTokenWithHandler:nil]);
+  XCTAssertNil([self.mockInstanceID token]);
   [self.mockInstanceID stopMocking];
-  OCMVerify([self.mockInstanceID fetchDefaultToken]);
+  OCMVerify([self.mockInstanceID defaultTokenWithHandler:nil]);
 }
 
 /**
@@ -513,10 +545,78 @@ static NSString *const kVersionInfo = @"1.0";
   [[[self.mockTokenManager stub] andReturn:sTokenInfo]
       cachedTokenInfoWithAuthorizedEntity:kAuthorizedEntity
                                     scope:@"*"];
+  [[self.mockInstanceID reject] defaultTokenWithHandler:nil];
+  XCTAssertEqualObjects([self.mockInstanceID token], kToken);
+}
 
-  [[self.mockInstanceID reject] fetchDefaultToken];
-  NSString *token = [self.mockInstanceID token];
-  XCTAssertEqualObjects(token, kToken);
+/**
+ *  Tests that the callback handler will be invoked when the default token is fetched
+ *  despite the token being unchanged.
+ */
+- (void)testDefaultToken_callbackInvokedForUnchangedToken {
+  XCTestExpectation *defaultTokenExpectation =
+      [self expectationWithDescription:@"Token fetch was successful."];
+
+  __block FIRInstanceIDTokenInfo *cachedTokenInfo = nil;
+
+  [self stubKeyPairStoreToReturnValidKeypair];
+
+  [self mockAuthServiceToAlwaysReturnValidCheckin];
+
+  // Mock Token manager to always succeed the token fetch, and return
+  // a particular cached value.
+
+  // Return a dynamic cachedToken variable whenever the cached is checked.
+  // This uses an invocation-based mock because the |cachedToken| pointer
+  // will change. Normal stubbing will always return the initial pointer,
+  // which in this case is 0x0 (nil).
+  [[[self.mockTokenManager stub] andDo:^(NSInvocation *invocation) {
+    [invocation setReturnValue:&cachedTokenInfo];
+  }] cachedTokenInfoWithAuthorizedEntity:kAuthorizedEntity scope:kFIRInstanceIDDefaultTokenScope];
+
+  [[[self.mockTokenManager stub] andDo:^(NSInvocation *invocation) {
+    self.newTokenCompletion(kToken, nil);
+  }] fetchNewTokenWithAuthorizedEntity:kAuthorizedEntity
+                                 scope:kFIRInstanceIDDefaultTokenScope
+                               keyPair:[OCMArg any]
+                               options:[OCMArg any]
+                               handler:[OCMArg checkWithBlock:^BOOL(id obj) {
+                                 self.newTokenCompletion = obj;
+                                 return obj != nil;
+                               }]];
+
+  __block NSInteger notificationPostCount = 0;
+  __block NSString *notificationToken = nil;
+
+  // Fetch token once to store token state
+  NSString *notificationName = kFIRInstanceIDTokenRefreshNotification;
+  self.tokenRefreshNotificationObserver = [[NSNotificationCenter defaultCenter]
+      addObserverForName:notificationName
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification *_Nonnull note) {
+                // Should have saved token to cache
+                cachedTokenInfo = sTokenInfo;
+
+                notificationPostCount++;
+                notificationToken = [[self.instanceID token] copy];
+                [defaultTokenExpectation fulfill];
+              }];
+  XCTAssertNil([self.mockInstanceID token]);
+  [self waitForExpectationsWithTimeout:10.0 handler:nil];
+  [[NSNotificationCenter defaultCenter] removeObserver:self.tokenRefreshNotificationObserver];
+
+  XCTAssertEqualObjects(notificationToken, kToken);
+
+  // Fetch default handler again without any token changes
+  XCTestExpectation *tokenCallback = [self expectationWithDescription:@"Callback was invoked."];
+
+  [self.mockInstanceID defaultTokenWithHandler:^(NSString *token, NSError *error) {
+    notificationToken = token;
+    [tokenCallback fulfill];
+  }];
+  [self waitForExpectationsWithTimeout:10.0 handler:nil];
+  XCTAssertEqualObjects(notificationToken, kToken);
 }
 
 /**
@@ -568,16 +668,13 @@ static NSString *const kVersionInfo = @"1.0";
                 cachedTokenInfo = sTokenInfo;
 
                 notificationPostCount++;
-
                 notificationToken = [[self.instanceID token] copy];
                 [defaultTokenExpectation fulfill];
               }];
-
-  NSString *token = [self.mockInstanceID token];
+  XCTAssertNil([self.mockInstanceID token]);
   [self waitForExpectationsWithTimeout:10.0 handler:nil];
   [[NSNotificationCenter defaultCenter] removeObserver:self.tokenRefreshNotificationObserver];
 
-  XCTAssertNil(token);
   XCTAssertEqualObjects(notificationToken, kToken);
 }
 
@@ -646,16 +743,14 @@ static NSString *const kVersionInfo = @"1.0";
                 cachedTokenInfo = sTokenInfo;
 
                 notificationPostCount++;
-
                 notificationToken = [[self.instanceID token] copy];
                 [defaultTokenExpectation fulfill];
               }];
+  XCTAssertNil([self.mockInstanceID token]);
 
-  NSString *token = [self.mockInstanceID token];
   [self waitForExpectationsWithTimeout:20.0 handler:nil];
   [[NSNotificationCenter defaultCenter] removeObserver:self.tokenRefreshNotificationObserver];
 
-  XCTAssertNil(token);
   XCTAssertEqualObjects(notificationToken, kToken);
   XCTAssertEqual(notificationPostCount, 1);
   XCTAssertEqual(newTokenFetchCount, trialsBeforeSuccess);
@@ -715,12 +810,11 @@ static NSString *const kVersionInfo = @"1.0";
                 cachedTokenInfo = sTokenInfo;
 
                 notificationPostCount++;
-
                 notificationToken = [[self.instanceID token] copy];
                 [defaultTokenExpectation fulfill];
               }];
 
-  NSString *token = [self.mockInstanceID token];
+  XCTAssertNil([self.mockInstanceID token]);
   // Invoke get token again with some delay. Our initial request to getToken hasn't yet
   // returned from the server.
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
@@ -736,7 +830,6 @@ static NSString *const kVersionInfo = @"1.0";
   [self waitForExpectationsWithTimeout:15.0 handler:nil];
   [[NSNotificationCenter defaultCenter] removeObserver:self.tokenRefreshNotificationObserver];
 
-  XCTAssertNil(token);
   XCTAssertEqualObjects(notificationToken, kToken);
   XCTAssertEqual(notificationPostCount, 1);
   XCTAssertEqual(newTokenFetchCount, 1);
@@ -776,11 +869,187 @@ static NSString *const kVersionInfo = @"1.0";
   [[[self.mockInstanceID stub] andReturnValue:@(0)] retryIntervalToFetchDefaultToken];
 
   // Try to fetch token once. It should set off retries since we mock failure.
-  NSString *token = [self.mockInstanceID token];
+  XCTAssertNil([self.mockInstanceID token]);
 
   [self waitForExpectationsWithTimeout:1.0 handler:nil];
-  XCTAssertNil(token);
+
   XCTAssertEqual(newTokenFetchCount, [FIRInstanceID maxRetryCountForDefaultToken]);
+}
+
+- (void)testInstanceIDWithHandler_WhileRequesting_Success {
+  [self stubKeyPairStoreToReturnValidKeypair];
+  [self mockAuthServiceToAlwaysReturnValidCheckin];
+
+  // Expect `fetchNewTokenWithAuthorizedEntity` to be called once
+  XCTestExpectation *fetchNewTokenExpectation =
+      [self expectationWithDescription:@"fetchNewTokenExpectation"];
+  __block FIRInstanceIDTokenHandler tokenHandler;
+
+  [[[self.mockTokenManager stub] andDo:^(NSInvocation *invocation) {
+    [invocation getArgument:&tokenHandler atIndex:6];
+    [fetchNewTokenExpectation fulfill];
+  }] fetchNewTokenWithAuthorizedEntity:kAuthorizedEntity
+                                 scope:kFIRInstanceIDDefaultTokenScope
+                               keyPair:[OCMArg any]
+                               options:[OCMArg any]
+                               handler:[OCMArg any]];
+
+  // Make 1st call
+  XCTestExpectation *handlerExpectation1 = [self expectationWithDescription:@"handlerExpectation1"];
+  FIRInstanceIDResultHandler handler1 =
+      ^(FIRInstanceIDResult *_Nullable result, NSError *_Nullable error) {
+        [handlerExpectation1 fulfill];
+        XCTAssertNotNil(result);
+        XCTAssertEqual(result.token, kToken);
+        XCTAssertNil(error);
+      };
+
+  [self.mockInstanceID instanceIDWithHandler:handler1];
+
+  // Make 2nd call
+  XCTestExpectation *handlerExpectation2 = [self expectationWithDescription:@"handlerExpectation1"];
+  FIRInstanceIDResultHandler handler2 =
+      ^(FIRInstanceIDResult *_Nullable result, NSError *_Nullable error) {
+        [handlerExpectation2 fulfill];
+        XCTAssertNotNil(result);
+        XCTAssertEqual(result.token, kToken);
+        XCTAssertNil(error);
+      };
+
+  [self.mockInstanceID instanceIDWithHandler:handler2];
+
+  // Wait for `fetchNewTokenWithAuthorizedEntity` to be performed
+  [self waitForExpectations:@[ fetchNewTokenExpectation ] timeout:1 enforceOrder:false];
+  // Finish token fetch request
+  tokenHandler(kToken, nil);
+
+  // Wait for completion handlers for both calls to be performed
+  [self waitForExpectationsWithTimeout:1 handler:NULL];
+}
+
+- (void)testInstanceIDWithHandler_WhileRequesting_RetrySuccess {
+  [self stubKeyPairStoreToReturnValidKeypair];
+  [self mockAuthServiceToAlwaysReturnValidCheckin];
+
+  // Expect `fetchNewTokenWithAuthorizedEntity` to be called twice
+  XCTestExpectation *fetchNewTokenExpectation1 =
+      [self expectationWithDescription:@"fetchNewTokenExpectation1"];
+  XCTestExpectation *fetchNewTokenExpectation2 =
+      [self expectationWithDescription:@"fetchNewTokenExpectation2"];
+  NSArray *fetchNewTokenExpectations = @[ fetchNewTokenExpectation1, fetchNewTokenExpectation2 ];
+
+  __block NSInteger fetchNewTokenCallCount = 0;
+  __block FIRInstanceIDTokenHandler tokenHandler;
+
+  [[[self.mockTokenManager stub] andDo:^(NSInvocation *invocation) {
+    [invocation getArgument:&tokenHandler atIndex:6];
+    [fetchNewTokenExpectations[fetchNewTokenCallCount] fulfill];
+    fetchNewTokenCallCount += 1;
+  }] fetchNewTokenWithAuthorizedEntity:kAuthorizedEntity
+                                 scope:kFIRInstanceIDDefaultTokenScope
+                               keyPair:[OCMArg any]
+                               options:[OCMArg any]
+                               handler:[OCMArg any]];
+
+  // Mock Instance ID's retry interval to 0, to vastly speed up this test.
+  [[[self.mockInstanceID stub] andReturnValue:@(0)] retryIntervalToFetchDefaultToken];
+
+  // Make 1st call
+  XCTestExpectation *handlerExpectation1 = [self expectationWithDescription:@"handlerExpectation1"];
+  FIRInstanceIDResultHandler handler1 =
+      ^(FIRInstanceIDResult *_Nullable result, NSError *_Nullable error) {
+        [handlerExpectation1 fulfill];
+        XCTAssertNotNil(result);
+        XCTAssertEqual(result.token, kToken);
+        XCTAssertNil(error);
+      };
+
+  [self.mockInstanceID instanceIDWithHandler:handler1];
+
+  // Make 2nd call
+  XCTestExpectation *handlerExpectation2 = [self expectationWithDescription:@"handlerExpectation1"];
+  FIRInstanceIDResultHandler handler2 =
+      ^(FIRInstanceIDResult *_Nullable result, NSError *_Nullable error) {
+        [handlerExpectation2 fulfill];
+        XCTAssertNotNil(result);
+        XCTAssertEqual(result.token, kToken);
+        XCTAssertNil(error);
+      };
+
+  [self.mockInstanceID instanceIDWithHandler:handler2];
+
+  // Wait for the 1st `fetchNewTokenWithAuthorizedEntity` to be performed
+  [self waitForExpectations:@[ fetchNewTokenExpectation1 ] timeout:1 enforceOrder:false];
+  // Fail for the 1st time
+  tokenHandler(nil, [NSError errorWithFIRInstanceIDErrorCode:kFIRInstanceIDErrorCodeUnknown]);
+
+  // Wait for the 2nd token feth
+  [self waitForExpectations:@[ fetchNewTokenExpectation2 ] timeout:1 enforceOrder:false];
+  // Finish with success
+  tokenHandler(kToken, nil);
+
+  // Wait for completion handlers for both calls to be performed
+  [self waitForExpectationsWithTimeout:1 handler:NULL];
+}
+
+- (void)testInstanceIDWithHandler_WhileRequesting_RetryFailure {
+  [self stubKeyPairStoreToReturnValidKeypair];
+  [self mockAuthServiceToAlwaysReturnValidCheckin];
+
+  // Expect `fetchNewTokenWithAuthorizedEntity` to be called once
+  NSMutableArray<XCTestExpectation *> *fetchNewTokenExpectations = [NSMutableArray array];
+  for (NSInteger i = 0; i < [[self.instanceID class] maxRetryCountForDefaultToken]; ++i) {
+    NSString *name = [NSString stringWithFormat:@"fetchNewTokenExpectation-%ld", (long)i];
+    [fetchNewTokenExpectations addObject:[self expectationWithDescription:name]];
+  }
+
+  __block NSInteger fetchNewTokenCallCount = 0;
+  __block FIRInstanceIDTokenHandler tokenHandler;
+
+  [[[self.mockTokenManager stub] andDo:^(NSInvocation *invocation) {
+    [invocation getArgument:&tokenHandler atIndex:6];
+    [fetchNewTokenExpectations[fetchNewTokenCallCount] fulfill];
+    fetchNewTokenCallCount += 1;
+  }] fetchNewTokenWithAuthorizedEntity:kAuthorizedEntity
+                                 scope:kFIRInstanceIDDefaultTokenScope
+                               keyPair:[OCMArg any]
+                               options:[OCMArg any]
+                               handler:[OCMArg any]];
+
+  // Mock Instance ID's retry interval to 0, to vastly speed up this test.
+  [[[self.mockInstanceID stub] andReturnValue:@(0)] retryIntervalToFetchDefaultToken];
+
+  // Make 1st call
+  XCTestExpectation *handlerExpectation1 = [self expectationWithDescription:@"handlerExpectation1"];
+  FIRInstanceIDResultHandler handler1 =
+      ^(FIRInstanceIDResult *_Nullable result, NSError *_Nullable error) {
+        [handlerExpectation1 fulfill];
+        XCTAssertNil(result);
+        XCTAssertNotNil(error);
+      };
+
+  [self.mockInstanceID instanceIDWithHandler:handler1];
+
+  // Make 2nd call
+  XCTestExpectation *handlerExpectation2 = [self expectationWithDescription:@"handlerExpectation1"];
+  FIRInstanceIDResultHandler handler2 =
+      ^(FIRInstanceIDResult *_Nullable result, NSError *_Nullable error) {
+        [handlerExpectation2 fulfill];
+        XCTAssertNil(result);
+        XCTAssertNotNil(error);
+      };
+
+  [self.mockInstanceID instanceIDWithHandler:handler2];
+
+  for (NSInteger i = 0; i < [[self.instanceID class] maxRetryCountForDefaultToken]; ++i) {
+    // Wait for the i `fetchNewTokenWithAuthorizedEntity` to be performed
+    [self waitForExpectations:@[ fetchNewTokenExpectations[i] ] timeout:1 enforceOrder:false];
+    // Fail for the i time
+    tokenHandler(nil, [NSError errorWithFIRInstanceIDErrorCode:kFIRInstanceIDErrorCodeUnknown]);
+  }
+
+  // Wait for completion handlers for both calls to be performed
+  [self waitForExpectationsWithTimeout:1 handler:NULL];
 }
 
 /**
