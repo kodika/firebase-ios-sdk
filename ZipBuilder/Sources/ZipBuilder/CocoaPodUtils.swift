@@ -249,7 +249,9 @@ public enum CocoaPodUtils {
     platform :ios, '\(largestMinVersion.podVersion())'
     target 'FrameworkMaker' do\n
     """
-
+    
+    podfile += "  pod 'Firebase'\n" //so we can include custom Firebase Pods
+    
     // Loop through the subspecs passed in and use the rawValue (actual Pod name).
     for pod in pods {
       podfile += "  pod '\(pod.podName)'\n"

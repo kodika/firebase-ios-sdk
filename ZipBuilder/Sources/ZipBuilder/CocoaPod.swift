@@ -61,6 +61,7 @@ public enum CocoaPod: String, CaseIterable {
   /// The name of the pod in the CocoaPods repo.
   public var podName: String {
     switch self {
+    case .database: return "FirebaseDatabase', :git => 'https://github.com/kodika/firebase-ios-sdk.git"
     case .googleSignIn: return rawValue
     default: return "Firebase/\(rawValue)"
     }
