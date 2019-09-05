@@ -61,6 +61,7 @@ public enum CocoaPod: String, CaseIterable {
   /// The name of the pod in the CocoaPods repo.
   public var podName: String {
     switch self {
+    case .database: return "FirebaseDatabase', :git => 'https://github.com/kodika/firebase-ios-sdk.git"
     case .googleSignIn: return rawValue
     default: return "Firebase/\(rawValue)"
     }
@@ -93,49 +94,8 @@ public enum CocoaPod: String, CaseIterable {
   /// of frameworks get pulled in.
   public func duplicateFrameworksToRemove() -> [String] {
     switch self {
-    case .mlVision:
-      return ["BarcodeDetector.framework",
-              "FaceDetector.framework",
-              "LabelDetector.framework",
-              "TextDetector.framework"]
-    case .mlVisionBarcodeModel:
-      return ["FaceDetector.framework",
-              "GTMSessionFetcher.framework",
-              "GoogleMobileVision.framework",
-              "LabelDetector.framework",
-              "Protobuf.framework",
-              "TextDetector.framework"]
-    case .mlVisionFaceModel:
-      return ["BarcodeDetector.framework",
-              "GTMSessionFetcher.framework",
-              "GoogleMobileVision.framework",
-              "LabelDetector.framework",
-              "Protobuf.framework",
-              "TextDetector.framework"]
-    case .mlVisionLabelModel:
-      return ["BarcodeDetector.framework",
-              "FaceDetector.framework",
-              "GTMSessionFetcher.framework",
-              "GoogleMobileVision.framework",
-              "Protobuf.framework",
-              "TextDetector.framework"]
-    case .mlVisionTextModel:
-      return ["BarcodeDetector.framework",
-              "FaceDetector.framework",
-              "GTMSessionFetcher.framework",
-              "GoogleMobileVision.framework",
-              "LabelDetector.framework",
-              "Protobuf.framework"]
-    case .mlVisionAutoML:
-      return ["BarcodeDetector.framework",
-              "FaceDetector.framework",
-              "LabelDetector.framework",
-              "TextDetector.framework"]
-    case .mlVisionObjectDetection:
-      return ["BarcodeDetector.framework",
-              "FaceDetector.framework",
-              "LabelDetector.framework",
-              "TextDetector.framework"]
+    case .mlVisionBarcodeModel, .mlVisionFaceModel, .mlVisionLabelModel, .mlVisionTextModel:
+      return ["GTMSessionFetcher.framework", "Protobuf.framework"]
     case .abTesting,
          .adMob,
          .analytics,
@@ -154,24 +114,14 @@ public enum CocoaPod: String, CaseIterable {
          .mlNLLanguageID,
          .mlNLSmartReply,
          .mlNLTranslate,
+         .mlVision,
+         .mlVisionAutoML,
+         .mlVisionObjectDetection,
          .performance,
          .remoteConfig,
          .storage:
       // By default, no folders need to be removed. Explicitly declare each case so we make an
       // intentional decision to not exclude frameworks.
-      return []
-    }
-  }
-
-  /// Returns a group of duplicate Resources that should be removed, if any.
-  public func duplicateResourcesToRemove() -> [String] {
-    switch self {
-    case .mlVisionFaceModel:
-      return ["GoogleMVTextDetectorResources.bundle"]
-    case .mlVisionTextModel:
-      return ["GoogleMVFaceDetectorResources.bundle"]
-    default:
-      // By default, no resources should be removed.
       return []
     }
   }

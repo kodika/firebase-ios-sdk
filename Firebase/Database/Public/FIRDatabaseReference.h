@@ -541,6 +541,13 @@ priority is meant to be preserved, you should use setValue:andPriority: instead.
 - (FIRDatabaseQuery *)queryEqualToValue:(nullable id)value
                                childKey:(nullable NSString *)childKey;
 
+/**
+ * queryWithBypassCache is used to generate a query that will not return cachedData
+ *
+ * @return A FIRDatabaseQuery instance, that will not return cached data.
+ */
+- (FIRDatabaseQuery *)queryWithBypassCache;
+
 #pragma mark - Managing presence
 
 /**

@@ -491,6 +491,10 @@
     return [super queryEqualToValue:value childKey:childKey];
 }
 
+- (FIRDatabaseQuery *)queryWithBypassCache {
+    return [super queryWithBypassCache];
+}
+
 #pragma mark -
 #pragma mark Transaction methods
 

@@ -23,6 +23,9 @@
 #import "FTrackedQuery.h"
 #import "FTrackedQueryManager.h"
 #import "FUtilities.h"
+#import "FPruneForest.h"
+#import "FClock.h"
+#import "FSnapshotUtilities.h"
 #import <FirebaseCore/FIRLogger.h>
 
 @interface FPersistenceManager ()
@@ -84,28 +87,33 @@
     BOOL complete;
     // TODO[offline]: Should we use trackedKeys to find out if this location is
     // a child of a complete query?
-    if ([self.trackedQueryManager isQueryComplete:query]) {
-        complete = YES;
-        FTrackedQuery *trackedQuery =
-            [self.trackedQueryManager findTrackedQuery:query];
-        if (!query.loadsAllData && trackedQuery.isComplete) {
-            trackedKeys = [self.storageEngine
-                trackedQueryKeysForQuery:trackedQuery.queryId];
-        } else {
-            trackedKeys = nil;
-        }
-    } else {
-        complete = NO;
-        trackedKeys =
-            [self.trackedQueryManager knownCompleteChildrenAtPath:query.path];
-    }
-
     id<FNode> node;
-    if (trackedKeys != nil) {
-        node = [self.storageEngine serverCacheForKeys:trackedKeys
-                                               atPath:query.path];
-    } else {
-        node = [self.storageEngine serverCacheAtPath:query.path];
+    if (query.params.bypassCache) {
+        complete = NO;
+        node = [FSnapshotUtilities nodeFrom:nil];
+    }else{
+        if ([self.trackedQueryManager isQueryComplete:query]) {
+            complete = YES;
+            FTrackedQuery *trackedQuery =
+            [self.trackedQueryManager findTrackedQuery:query];
+            if (!query.loadsAllData && trackedQuery.isComplete) {
+                trackedKeys = [self.storageEngine
+                               trackedQueryKeysForQuery:trackedQuery.queryId];
+            } else {
+                trackedKeys = nil;
+            }
+        } else {
+            complete = NO;
+            trackedKeys =
+            [self.trackedQueryManager knownCompleteChildrenAtPath:query.path];
+        }
+        
+        if (trackedKeys != nil) {
+            node = [self.storageEngine serverCacheForKeys:trackedKeys
+                                                   atPath:query.path];
+        } else {
+            node = [self.storageEngine serverCacheAtPath:query.path];
+        }
     }
 
     FIndexedNode *indexedNode = [FIndexedNode indexedNodeWithNode:node

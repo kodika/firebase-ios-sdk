@@ -229,6 +229,109 @@
   [device dispose];
 }
 
+- (void)testServerDataNotReturnedWhenQueryWithBypassCacheWhenOnline {
+    FIRDatabaseReference *writerRef = [FTestHelpers getRandomNode];
+    FDevice *device = [[FDevice alloc] initOnlineWithUrl:[writerRef description] ];
+    id data = @{@"a": @1, @"b": @2};
+    [device do:^(FIRDatabaseReference *ref) {
+        [self waitForCompletionOf:ref setValue:data];
+    }];
+    
+    // Wait for the data to get it cached.
+    [device do:^(FIRDatabaseReference *ref) {
+        [self waitForValueOf:ref toBe:data];
+    }];
+    
+    // Write new data using different device so not cached
+    id newData = @{@"a": @1, @"b": @2, @"c": @3};
+    
+    FDevice *secondDevice = [[FDevice alloc] initOnlineWithUrl:[writerRef description] ];
+    [secondDevice waitForIdleUsingWaiter:self];
+    [secondDevice do:^(FIRDatabaseReference *ref) {
+        [self waitForCompletionOf:ref setValue:newData];
+    }];
+    [secondDevice dispose];
+    
+    //Normal observe should return previous data
+    __block BOOL done = NO;
+    done = NO;
+    [device do:^(FIRDatabaseReference *ref) {
+        [ref observeSingleEventOfType:FIRDataEventTypeValue withBlock:^(FIRDataSnapshot *snapshot) {
+            XCTAssertEqualObjects(data, [snapshot value], @"Properly saw node value");
+            done = YES;
+        }];
+    }];
+    WAIT_FOR(done);
+    
+    //queryWithBypassCache observe should return new data from server
+    done = NO;
+    [device do:^(FIRDatabaseReference *ref) {
+        [ref.queryWithBypassCache observeSingleEventOfType:FIRDataEventTypeValue withBlock:^(FIRDataSnapshot *snapshot) {
+            XCTAssertEqualObjects(newData, [snapshot value], @"Properly saw node value");
+            done = YES;
+        }];
+    }];
+    WAIT_FOR(done);
+    
+    [device dispose];
+}
+
+- (void)testServerDataNotReturnedWhenQueryWithBypassCacheWhenOffline {
+    FIRDatabaseReference *writerRef = [FTestHelpers getRandomNode];
+    FDevice *device = [[FDevice alloc] initOnlineWithUrl:[writerRef description] ];
+    __block BOOL done = NO;
+    id data = @{@"a": @1, @"b": @2};
+    [writerRef setValue:data withCompletionBlock:^(NSError *error, FIRDatabaseReference *ref) {
+        done = YES;
+    }];
+    WAIT_FOR(done);
+
+    // Wait for the data to get it cached.
+    [device do:^(FIRDatabaseReference *ref) {
+        [self waitForValueOf:ref toBe:data];
+    }];
+
+    // Write new data using different device so not cached
+    id newData = @{@"a": @1, @"b": @2, @"c": @3};
+
+    FDevice *secondDevice = [[FDevice alloc] initOnlineWithUrl:[writerRef description] ];
+    [secondDevice do:^(FIRDatabaseReference *ref) {
+        [self waitForCompletionOf:ref setValue:newData];
+    }];
+    [secondDevice dispose];
+
+
+    [device goOffline];
+
+    //Normal observe should return previous cached data
+    done = NO;
+    [device do:^(FIRDatabaseReference *ref) {
+        [ref observeSingleEventOfType:FIRDataEventTypeValue withBlock:^(FIRDataSnapshot *snapshot) {
+            XCTAssertEqualObjects(data, [snapshot value], @"Properly saw node value");
+            done = YES;
+        }];
+    }];
+    WAIT_FOR(done);
+
+    //queryWithBypassCache observe should not return data
+    XCTestExpectation *timeoutExpectation = [self expectationWithDescription:@"Should not be fulfilled"];
+    [timeoutExpectation setInverted:YES];
+
+    __block FIRDatabaseHandle handle;
+    __block FIRDatabaseQuery *handleRef;
+    [device do:^(FIRDatabaseReference *ref) {
+        handleRef = ref.queryWithBypassCache;
+        handle = [handleRef observeEventType:FIRDataEventTypeValue withBlock:^(FIRDataSnapshot *snapshot) {
+            [timeoutExpectation fulfill];
+        }];
+    }];
+
+    [self waitForExpectationsWithTimeout:kFirebaseTestWaitUntilTimeout handler:nil];
+    [handleRef removeObserverWithHandle:handle];
+
+    [device dispose];
+}
+
 - (void)testServerDataLimit {
   FIRDatabaseReference *writerRef = [FTestHelpers getRandomNode];
   FDevice *device = [[FDevice alloc] initOnlineWithUrl:[writerRef description]];
